@@ -8,8 +8,6 @@ import re
 
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        # The routing is handled by vercel.json, so we can assume any GET request
-        # is meant for our API endpoint. We no longer need to check the path.
         parsed_path = urlparse(self.path)
         query_params = parse_qs(parsed_path.query)
         
@@ -23,7 +21,6 @@ class handler(BaseHTTPRequestHandler):
         pages = int(query_params.get('pages', ['1'])[0])
 
         try:
-            # Scrape data with the new parameters
             data = self.scrape_vinted_data(
                 search_text=search_text,
                 brand=brand,
@@ -56,15 +53,19 @@ class handler(BaseHTTPRequestHandler):
     def scrape_vinted_data(self, search_text, brand, category, min_price, max_price, country, pages):
         all_data = []
         
-        # Combine search terms for a more effective search
-        full_search_text = f'{search_text} {brand} {category}'.strip()
+        # If a category is provided, append it to the search text.
+        # This is a simple way to filter by category without needing complex category IDs.
+        if category:
+            search_text = f"{search_text} {category}".strip()
 
         for page in range(1, pages + 1):
             try:
-                # Build Vinted URL with all parameters
                 base_url = f'https://www.vinted.{country}/catalog'
+                
+                # Use separate parameters for search text and brand for accurate filtering.
                 params = {
-                    'search_text': full_search_text,
+                    'search_text': search_text,
+                    'brand_title': brand, # Use Vinted's parameter for brand name
                     'price_from': min_price,
                     'price_to': max_price,
                     'page': page
@@ -82,10 +83,9 @@ class handler(BaseHTTPRequestHandler):
                 
                 soup = BeautifulSoup(response.content, 'html.parser')
                 
-                # Vinted embeds its data in a script tag as JSON. This is more reliable than scraping visible HTML.
                 script_tag = soup.find('script', {'data-js-react-on-rails-store': 'MainStore'})
                 if not script_tag:
-                    break # Stop if the data structure isn't found
+                    break
 
                 json_data = json.loads(script_tag.string)
                 items = json_data.get('items', {}).get('byId', {})
@@ -94,7 +94,6 @@ class handler(BaseHTTPRequestHandler):
                     break
 
                 for item_id, item_details in items.items():
-                    # Filter out items that are not visible or are reserved
                     if item_details and item_details.get('is_visible') and not item_details.get('is_reserved'):
                         all_data.append({
                             'Title': item_details.get('title', 'N/A'),

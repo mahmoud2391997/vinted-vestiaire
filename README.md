@@ -5,7 +5,7 @@ This project provides a serverless API endpoint to scrape product data from Vint
 
 ## API Usage
 
-The API is served from the root path (`/`).
+The API is served from the `/api` path.
 
 ### Request
 
@@ -24,7 +24,7 @@ Make a `GET` request to the endpoint with the following query parameters:
 **Example Request:**
 
 ```
-/?search=gucci%20bag&brand=gucci&min_price=100&max_price=500&country=fr
+https://vinted-scraping.vercel.app/api?search=gucci%20bag&brand=gucci&min_price=100&max_price=500&country=fr
 ```
 
 ### Response Structure
@@ -49,8 +49,3 @@ The API returns a JSON object with the following structure:
   "error": null
 }
 ```
-
-- `success` (boolean): `true` if the request was successful, `false` otherwise.
-- `data` (array): A list of product objects found.
-- `count` (integer): The number of products in the `data` array.
-- `error` (string|null): An error message if the request failed, otherwise `null`.
