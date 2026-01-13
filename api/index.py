@@ -115,12 +115,18 @@ class handler(BaseHTTPRequestHandler):
         import re
         text = item_container.get_text()
         
-        data = {'Title': 'N/A', 'Price': 'N/A', 'Brand': 'N/A', 'Size': 'N/A'}
+        data = {'Title': 'N/A', 'Price': 'N/A', 'Brand': 'N/A', 'Size': 'N/A', 'Image': 'N/A'}
         
-        # First try to get title from image alt text
+        # First try to get title and image from image alt text
         images = item_container.find_all('img')
         for img in images:
             alt = img.get('alt', '')
+            src = img.get('src', '')
+            
+            # Extract image URL
+            if src and data['Image'] == 'N/A':
+                data['Image'] = src
+            
             if alt and len(alt) > 10:
                 # Extract the main product name from alt text
                 # Format: "Product name, size: X, brand: Y, price: Z"
