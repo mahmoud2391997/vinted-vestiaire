@@ -20,6 +20,10 @@ A modern, responsive web scraper for Vinted.pl with real-time data extraction, a
   - Christian Dior, Michael Kors, Coach
   - Nike, Adidas, Zara, H&M, Levi's
 - **Category Filtering** - Bags, Shoes, Clothing, Accessories
+- **Price Filtering** - Min/max price range controls:
+  - `min_price=50` - Products 50zł and above
+  - `max_price=200` - Products 200zł and below
+  - `min_price=50&max_price=200` - Products between 50-200zł
 - **Advanced Pagination** - Full pagination support with:
   - Page number navigation (page=1, page=2, etc.)
   - Customizable items per page (items_per_page=10, 20, 50, 100)
@@ -62,7 +66,7 @@ http://localhost:8093/
 - **Response**: HTML with modern interface
 
 ### Data API
-- **URL**: `/?search={term}&page={number}&items_per_page={count}`
+- **URL**: `/?search={term}&page={number}&items_per_page={count}&min_price={min}&max_price={max}`
 - **Method**: GET
 - **Response**: JSON with product data
 
@@ -72,6 +76,8 @@ http://localhost:8093/
 | `search` | String | Main search query | `bags` | `dior%20bag` |
 | `page` | Integer | Page number to fetch | `1` | `2` |
 | `items_per_page` | Integer | Items per page | `50` | `10` |
+| `min_price` | Float | Minimum price filter | `None` | `50` |
+| `max_price` | Float | Maximum price filter | `None` | `200` |
 
 #### API Response Structure
 ```json
@@ -160,10 +166,25 @@ curl "http://localhost:8095/?search=bags&page=10&items_per_page=10"
 ### Different Items Per Page
 ```bash
 # 25 items per page
-curl "http://localhost:8095/?search=bags&page=1&items_per_page=25"
+curl "http://localhost:8099/?search=bags&page=1&items_per_page=25"
 
 # 100 items per page
-curl "http://localhost:8095/?search=bags&page=1&items_per_page=100"
+curl "http://localhost:8099/?search=bags&page=1&items_per_page=100"
+```
+
+### Price Filtering
+```bash
+# Products between 50-100 zł
+curl "http://localhost:8099/?search=bags&min_price=50&max_price=100"
+
+# Products over 200 zł
+curl "http://localhost:8099/?search=bags&min_price=200"
+
+# Products under 50 zł
+curl "http://localhost:8099/?search=bags&max_price=50"
+
+# Combined: Dior bags between 100-500 zł
+curl "http://localhost:8099/?search=dior%20bag&min_price=100&max_price=500"
 ```
 
 ### Frontend Integration

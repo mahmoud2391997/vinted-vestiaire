@@ -19,10 +19,12 @@ class handler(BaseHTTPRequestHandler):
                 pages = int(query_params.get('pages', ['1'])[0])
                 items_per_page = int(query_params.get('items_per_page', ['50'])[0])
                 page_number = int(query_params.get('page', ['1'])[0])
+                min_price = query_params.get('min_price', [None])[0]
+                max_price = query_params.get('max_price', [None])[0]
                 
                 try:
                     # Scrape real data
-                    data = self.scrape_vinted_data(search_text, page_number, items_per_page)
+                    data = self.scrape_vinted_data(search_text, page_number, items_per_page, min_price, max_price)
                     self.send_json_response(data['products'], data['pagination'])
                 except Exception as e:
                     # Fallback to sample data if scraping fails
@@ -73,7 +75,7 @@ class handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(content.encode('utf-8'))
     
-    def scrape_vinted_data(self, search_text, page_number=1, items_per_page=50):
+    def scrape_vinted_data(self, search_text, page_number=1, items_per_page=50, min_price=None, max_price=None):
         """Scrape data from Vinted using requests and BeautifulSoup"""
         # Create a cache key for this search
         cache_key = f"{search_text}_{page_number}_{items_per_page}"
@@ -140,6 +142,30 @@ class handler(BaseHTTPRequestHandler):
         
         # Calculate total items available
         total_items = len(all_data)
+        
+        # Apply price filtering if specified
+        if min_price is not None or max_price is not None:
+            filtered_data = []
+            for item in all_data:
+                price_str = item.get('Price', '0zł')
+                # Extract numeric value from price string
+                import re
+                price_match = re.search(r'(\d+[.,]?\d*)', price_str.replace(' ', ''))
+                if price_match:
+                    price_value = float(price_match.group(1).replace(',', '.'))
+                    
+                    # Apply filters
+                    include_item = True
+                    if min_price is not None:
+                        include_item = include_item and price_value >= float(min_price)
+                    if max_price is not None:
+                        include_item = include_item and price_value <= float(max_price)
+                    
+                    if include_item:
+                        filtered_data.append(item)
+            
+            all_data = filtered_data
+            total_items = len(all_data)
         
         # For consistency, if we have a reasonable number of items, use a stable estimate
         # This prevents fluctuation due to Vinted's dynamic content
@@ -239,10 +265,24 @@ class handler(BaseHTTPRequestHandler):
         # Clean up the text for other extractions
         clean_text = text.replace('\xa0', ' ').replace('\n', ' ').strip()
         
-        # Extract price (first price found)
-        price_match = re.search(r'(\d+,\d+)\s*zł', clean_text)
-        if price_match:
-            data['Price'] = price_match.group(1) + 'zł'
+        # Extract price (improved patterns for better accuracy)
+        price_patterns = [
+            r'(\d+,\d+)\s*zł',           # Standard format: 150,00zł
+            r'(\d+\.\d+)\s*zł',           # Alternative format: 150.00zł
+            r'(\d+)\s*zł',                # Whole numbers: 150zł
+            r'(\d+,\d+)',                 # Just numbers with comma: 150,00
+            r'(\d+\.\d+)'                 # Just numbers with dot: 150.00
+        ]
+        
+        for pattern in price_patterns:
+            price_match = re.search(pattern, clean_text)
+            if price_match:
+                price = price_match.group(1)
+                # Ensure proper formatting with zł
+                if not price.endswith('zł'):
+                    price = price + 'zł'
+                data['Price'] = price
+                break
         
         # Extract brand - look for known brand patterns or from alt text
         # Check alt text first
