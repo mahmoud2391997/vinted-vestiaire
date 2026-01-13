@@ -20,7 +20,10 @@ A modern, responsive web scraper for Vinted.pl with real-time data extraction, a
   - Christian Dior, Michael Kors, Coach
   - Nike, Adidas, Zara, H&M, Levi's
 - **Category Filtering** - Bags, Shoes, Clothing, Accessories
-- **Pagination Support** - Fetch multiple pages of results
+- **Advanced Pagination** - Full pagination support with:
+  - Page number navigation (page=1, page=2, etc.)
+  - Customizable items per page (items_per_page=10, 20, 50, 100)
+  - Smart pagination info (total pages, has_more, start/end indices)
 - **Real-time Results** - Dynamic product grid with count display
 
 ### 📊 Data Extraction
@@ -59,15 +62,16 @@ http://localhost:8093/
 - **Response**: HTML with modern interface
 
 ### Data API
-- **URL**: `/?search={term}&pages={number}`
+- **URL**: `/?search={term}&page={number}&items_per_page={count}`
 - **Method**: GET
 - **Response**: JSON with product data
 
 #### API Parameters
 | Parameter | Type | Description | Default | Example |
 |-----------|------|-------------|---------|---------|
-| `search` | String | Main search query | `bags` |
-| `pages` | Integer | Number of pages to scrape | `2` |
+| `search` | String | Main search query | `bags` | `dior%20bag` |
+| `page` | Integer | Page number to fetch | `1` | `2` |
+| `items_per_page` | Integer | Items per page | `50` | `10` |
 
 #### API Response Structure
 ```json
@@ -83,10 +87,30 @@ http://localhost:8093/
       "Link": "https://www.vinted.pl/items/..."
     }
   ],
-  "count": 96,
+  "count": 10,
+  "pagination": {
+    "current_page": 1,
+    "items_per_page": 10,
+    "total_items": 96,
+    "total_pages": 10,
+    "has_more": true,
+    "start_index": 0,
+    "end_index": 10
+  },
   "error": null
 }
 ```
+
+#### Pagination Fields
+| Field | Type | Description |
+|-------|------|-------------|
+| `current_page` | Integer | Current page number requested |
+| `items_per_page` | Integer | Number of items per page |
+| `total_items` | Integer | Total items available for search |
+| `total_pages` | Integer | Total number of pages available |
+| `has_more` | Boolean | Whether more pages are available |
+| `start_index` | Integer | Starting index of current page items |
+| `end_index` | Integer | Ending index of current page items |
 
 ## 🛠️ Technology Stack
 
@@ -111,21 +135,52 @@ http://localhost:8093/
 
 ## 📱 Usage Examples
 
+### Basic Search
+```bash
+curl "http://localhost:8095/?search=bags&page=1&items_per_page=20"
+```
+
 ### Search for Luxury Bags
 ```bash
-curl "http://localhost:8093/?search=dior%20bag&pages=2"
+curl "http://localhost:8095/?search=dior%20bag&page=1&items_per_page=10"
 ```
 
-### Filter by Brand
-```javascript
-// Frontend automatically filters when brand chips are clicked
-// Backend supports brand-specific searches
-```
-
-### Multiple Pages
+### Navigate Pages
 ```bash
-curl "http://localhost:8093/?search=bags&pages=5"
-# Returns ~480 products (96 items × 5 pages)
+# Page 1 - First 10 items
+curl "http://localhost:8095/?search=bags&page=1&items_per_page=10"
+
+# Page 2 - Next 10 items  
+curl "http://localhost:8095/?search=bags&page=2&items_per_page=10"
+
+# Page 10 - Last page
+curl "http://localhost:8095/?search=bags&page=10&items_per_page=10"
+```
+
+### Different Items Per Page
+```bash
+# 25 items per page
+curl "http://localhost:8095/?search=bags&page=1&items_per_page=25"
+
+# 100 items per page
+curl "http://localhost:8095/?search=bags&page=1&items_per_page=100"
+```
+
+### Frontend Integration
+```javascript
+// Fetch page 2 with 15 items per page
+fetch('/?search=dior&page=2&items_per_page=15')
+  .then(response => response.json())
+  .then(data => {
+    console.log(`Showing ${data.count} items`);
+    console.log(`Page ${data.pagination.current_page} of ${data.pagination.total_pages}`);
+    console.log(`Has more: ${data.pagination.has_more}`);
+    
+    // Display products
+    data.data.forEach(product => {
+      console.log(product.Title, product.Price, product.Brand);
+    });
+  });
 ```
 
 ## 🔧 Configuration

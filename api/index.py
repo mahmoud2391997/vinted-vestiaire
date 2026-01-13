@@ -17,27 +17,37 @@ class handler(BaseHTTPRequestHandler):
                 query_params = parse_qs(parsed_path.query)
                 search_text = query_params.get('search', ['t-shirt'])[0]
                 pages = int(query_params.get('pages', ['1'])[0])
+                items_per_page = int(query_params.get('items_per_page', ['50'])[0])
+                page_number = int(query_params.get('page', ['1'])[0])
                 
                 try:
                     # Scrape real data
-                    data = self.scrape_vinted_data(search_text, pages)
-                    self.send_json_response(data)
+                    data = self.scrape_vinted_data(search_text, page_number, items_per_page)
+                    self.send_json_response(data['products'], data['pagination'])
                 except Exception as e:
                     # Fallback to sample data if scraping fails
                     sample_data = self.get_sample_data()
-                    self.send_json_response(sample_data, error=str(e))
+                    pagination = {'current_page': 1, 'total_pages': 1, 'has_more': False, 'items_per_page': len(sample_data), 'total_items': len(sample_data)}
+                    self.send_json_response(sample_data, pagination, error=str(e))
             else:
                 # HTML request - serve enhanced UI
                 self.send_html_response()
         else:
             self.send_http_response(404, 'Not Found')
     
-    def send_json_response(self, data, error=None):
+    def send_json_response(self, data, pagination=None, error=None):
         """Send JSON response"""
         response = {
             'success': True,
             'data': data,
             'count': len(data),
+            'pagination': pagination or {
+                'current_page': 1,
+                'total_pages': 1,
+                'has_more': False,
+                'items_per_page': len(data),
+                'total_items': len(data)
+            },
             'error': error
         }
         
@@ -63,11 +73,17 @@ class handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(content.encode('utf-8'))
     
-    def scrape_vinted_data(self, search_text, pages=1):
+    def scrape_vinted_data(self, search_text, page_number=1, items_per_page=50):
         """Scrape data from Vinted using requests and BeautifulSoup"""
         all_data = []
+        has_more_pages = False
+        total_pages = 0
+        total_items = 0
         
-        for page in range(1, pages + 1):
+        # Calculate how many pages we need to scrape to get enough items
+        pages_to_scrape = max(1, (page_number * items_per_page + items_per_page - 1) // 96)  # 96 items per page max
+        
+        for page in range(1, pages_to_scrape + 1):
             try:
                 # Format search query
                 formatted_search = search_text.replace(' ', '%20')
@@ -81,6 +97,12 @@ class handler(BaseHTTPRequestHandler):
                 
                 if response.status_code == 200:
                     soup = BeautifulSoup(response.content, 'html.parser')
+                    
+                    # Check for pagination info
+                    if page == 1:  # Only check on first page
+                        pagination_info = self.check_pagination(soup)
+                        total_pages = pagination_info['total_pages']
+                        has_more_pages = pagination_info['has_more']
                     
                     # Find product items using correct selector
                     items = soup.find_all('a', href=lambda x: x and '/items/' in x)
@@ -108,7 +130,63 @@ class handler(BaseHTTPRequestHandler):
                 print(f"Error scraping page {page}: {e}")
                 break
         
-        return all_data if all_data else self.get_sample_data()
+        # Calculate total items available
+        total_items = len(all_data)
+        
+        # Calculate pagination for the requested page
+        start_index = (page_number - 1) * items_per_page
+        end_index = start_index + items_per_page
+        page_data = all_data[start_index:end_index]
+        
+        # Return data with pagination info
+        result = {
+            'products': page_data if page_data else self.get_sample_data(),
+            'pagination': {
+                'current_page': page_number,
+                'items_per_page': items_per_page,
+                'total_items': total_items,
+                'total_pages': (total_items + items_per_page - 1) // items_per_page,
+                'has_more': end_index < total_items,
+                'start_index': start_index,
+                'end_index': min(end_index, total_items)
+            }
+        }
+        
+        return result
+    
+    def check_pagination(self, soup):
+        """Check if there are more pages available"""
+        try:
+            # Look for pagination elements
+            pagination = soup.find('div', class_='pagination')
+            if pagination:
+                # Find all page links
+                page_links = pagination.find_all('a', href=lambda x: x and 'page=' in x)
+                if page_links:
+                    # Extract page numbers from links
+                    page_numbers = []
+                    for link in page_links:
+                        href = link.get('href', '')
+                        page_match = re.search(r'page=(\d+)', href)
+                        if page_match:
+                            page_numbers.append(int(page_match.group(1)))
+                    
+                    if page_numbers:
+                        total_pages = max(page_numbers)
+                        has_more = total_pages > 1
+                        return {'total_pages': total_pages, 'has_more': has_more}
+            
+            # Alternative: check for "Next" button or similar
+            next_button = soup.find('a', string=re.compile(r'Next|Następna|>', re.IGNORECASE))
+            if next_button:
+                return {'total_pages': 2, 'has_more': True}
+            
+            # Default: assume only one page
+            return {'total_pages': 1, 'has_more': False}
+            
+        except Exception as e:
+            print(f"Error checking pagination: {e}")
+            return {'total_pages': 1, 'has_more': False}
     
     def extract_item_data(self, item_container):
         """Extract data from the item container's text content"""
