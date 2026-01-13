@@ -1,3 +1,4 @@
+
 from http.server import BaseHTTPRequestHandler
 import json
 import requests
@@ -7,36 +8,34 @@ import re
 
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
+        # The routing is handled by vercel.json, so we can assume any GET request
+        # is meant for our API endpoint. We no longer need to check the path.
         parsed_path = urlparse(self.path)
+        query_params = parse_qs(parsed_path.query)
         
-        if parsed_path.path == '/':
-            query_params = parse_qs(parsed_path.query)
-            
-            # Extract parameters
-            search_text = query_params.get('search', [''])[0]
-            brand = query_params.get('brand', [''])[0]
-            category = query_params.get('category', [''])[0]
-            min_price = query_params.get('min_price', [''])[0]
-            max_price = query_params.get('max_price', [''])[0]
-            country = query_params.get('country', ['pl'])[0] # Default to Poland
-            pages = int(query_params.get('pages', ['1'])[0])
+        # Extract parameters
+        search_text = query_params.get('search', [''])[0]
+        brand = query_params.get('brand', [''])[0]
+        category = query_params.get('category', [''])[0]
+        min_price = query_params.get('min_price', [''])[0]
+        max_price = query_params.get('max_price', [''])[0]
+        country = query_params.get('country', ['pl'])[0] # Default to Poland
+        pages = int(query_params.get('pages', ['1'])[0])
 
-            try:
-                # Scrape data with the new parameters
-                data = self.scrape_vinted_data(
-                    search_text=search_text,
-                    brand=brand,
-                    category=category,
-                    min_price=min_price,
-                    max_price=max_price,
-                    country=country,
-                    pages=pages
-                )
-                self.send_json_response(data)
-            except Exception as e:
-                self.send_json_response([], error=str(e), status_code=500)
-        else:
-            self.send_http_response(404, 'Not Found', 'text/plain')
+        try:
+            # Scrape data with the new parameters
+            data = self.scrape_vinted_data(
+                search_text=search_text,
+                brand=brand,
+                category=category,
+                min_price=min_price,
+                max_price=max_price,
+                country=country,
+                pages=pages
+            )
+            self.send_json_response(data)
+        except Exception as e:
+            self.send_json_response([], error=str(e), status_code=500)
 
     def send_json_response(self, data, error=None, status_code=200):
         response = {
