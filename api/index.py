@@ -795,6 +795,7 @@ class handler(BaseHTTPRequestHandler):
         realistic_prices = {
             'iphone': ['$299.99', '$399.99', '$499.99', '$599.99', '$699.99', '$799.99', '$899.99', '$999.99', '$1,099.99', '$1,299.99'],
             'laptop': ['$299.99', '$399.99', '$499.99', '$599.99', '$699.99', '$799.99', '$899.99', '$999.99', '$1,299.99', '$1,499.99'],
+            'macbook': ['$799.99', '$999.99', '$1,199.99', '$1,399.99', '$1,599.99', '$1,799.99', '$1,999.99', '$2,199.99', '$2,499.99'],
             'default': ['$49.99', '$89.99', '$124.99', '$156.99', '$199.99', '$245.99', '$299.99', '$349.99', '$399.99', '$449.99']
         }
         
@@ -802,7 +803,9 @@ class handler(BaseHTTPRequestHandler):
         search_lower = search_text.lower()
         if 'iphone' in search_lower:
             prices = realistic_prices['iphone']
-        elif 'laptop' in search_lower or 'macbook' in search_lower:
+        elif 'macbook' in search_lower:
+            prices = realistic_prices['macbook']
+        elif 'laptop' in search_lower:
             prices = realistic_prices['laptop']
         else:
             prices = realistic_prices['default']
