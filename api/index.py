@@ -105,10 +105,11 @@ class handler(BaseHTTPRequestHandler):
                 page_number = int(query_params.get('page', ['1'])[0])
                 min_price = query_params.get('min_price', [None])[0]
                 max_price = query_params.get('max_price', [None])[0]
+                country = query_params.get('country', ['uk'])[0]
                 
                 try:
                     # Scrape real data
-                    data = self.scrape_vinted_data(search_text, page_number, items_per_page, min_price, max_price)
+                    data = self.scrape_vinted_data(search_text, page_number, items_per_page, min_price, max_price, country)
                     self.send_json_response(data['products'], data['pagination'])
                 except Exception as e:
                     # Fallback to sample data if scraping fails
@@ -126,9 +127,10 @@ class handler(BaseHTTPRequestHandler):
             items_per_page = int(query_params.get('items_per_page', ['50'])[0])
             min_price = query_params.get('min_price', [None])[0]
             max_price = query_params.get('max_price', [None])[0]
+            country = query_params.get('country', ['uk'])[0]
             
             try:
-                data = self.scrape_ebay_data(search_text, page_number, items_per_page, min_price, max_price)
+                data = self.scrape_ebay_data(search_text, page_number, items_per_page, min_price, max_price, country)
                 self.send_json_response(data['products'], data['pagination'])
             except Exception as e:
                 sample_data = self.get_ebay_sample_data()
@@ -175,10 +177,10 @@ class handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(content.encode('utf-8'))
     
-    def scrape_vinted_data(self, search_text, page_number=1, items_per_page=50, min_price=None, max_price=None):
+    def scrape_vinted_data(self, search_text, page_number=1, items_per_page=50, min_price=None, max_price=None, country='uk'):
         """Scrape data from Vinted using requests and BeautifulSoup"""
         # Create a cache key for this search
-        cache_key = f"{search_text}_{page_number}_{items_per_page}"
+        cache_key = f"{search_text}_{page_number}_{items_per_page}_{country}"
         
         # For consistency, always scrape the same way for the same search
         all_data = []
@@ -197,7 +199,37 @@ class handler(BaseHTTPRequestHandler):
             try:
                 # Format search query
                 formatted_search = search_text.replace(' ', '%20')
-                url = f"https://www.vinted.pl/catalog?search_text={formatted_search}&page={page}"
+                
+                # Map country to Vinted domain
+                country_domains = {
+                    'uk': 'vinted.co.uk',
+                    'pl': 'vinted.pl',
+                    'de': 'vinted.de',
+                    'fr': 'vinted.fr',
+                    'it': 'vinted.it',
+                    'es': 'vinted.es',
+                    'nl': 'vinted.nl',
+                    'be': 'vinted.be',
+                    'at': 'vinted.at',
+                    'cz': 'vinted.cz',
+                    'sk': 'vinted.sk',
+                    'hu': 'vinted.hu',
+                    'ro': 'vinted.ro',
+                    'bg': 'vinted.bg',
+                    'hr': 'vinted.hr',
+                    'si': 'vinted.si',
+                    'lt': 'vinted.lt',
+                    'lv': 'vinted.lv',
+                    'ee': 'vinted.ee',
+                    'pt': 'vinted.pt',
+                    'se': 'vinted.se',
+                    'dk': 'vinted.dk',
+                    'fi': 'vinted.fi',
+                    'ie': 'vinted.ie'
+                }
+                
+                domain = country_domains.get(country.lower(), 'vinted.co.uk')
+                url = f"https://www.{domain}/catalog?search_text={formatted_search}&page={page}"
                 
                 # Make request
                 headers = {
@@ -435,10 +467,10 @@ class handler(BaseHTTPRequestHandler):
         
         return data
     
-    def scrape_ebay_data(self, search_text, page_number=1, items_per_page=50, min_price=None, max_price=None):
+    def scrape_ebay_data(self, search_text, page_number=1, items_per_page=50, min_price=None, max_price=None, country='uk'):
         """Scrape data from eBay using eBay Browse API with rate limiting and caching"""
         # Create cache key
-        cache_key = f"ebay_{search_text}_{page_number}_{items_per_page}_{min_price}_{max_price}"
+        cache_key = f"ebay_{search_text}_{page_number}_{items_per_page}_{min_price}_{max_price}_{country}"
         
         # Check cache first
         cached_result = cache_manager.get(cache_key)
@@ -476,28 +508,60 @@ class handler(BaseHTTPRequestHandler):
             # Validate credentials are provided
             if not app_id or not cert_id:
                 print("Missing eBay credentials - falling back to public API")
-                return self.scrape_ebay_public_api(search_text, page_number, items_per_page, min_price, max_price)
+                return self.scrape_ebay_public_api(search_text, page_number, items_per_page, min_price, max_price, country)
             
             # For demo purposes, if placeholder keys are used, fall back to public API
             if app_id == 'YOUR_APP_ID' or cert_id == 'YOUR_CERT_ID':
                 print("Using placeholder credentials - falling back to public API")
-                return self.scrape_ebay_public_api(search_text, page_number, items_per_page, min_price, max_price)
+                return self.scrape_ebay_public_api(search_text, page_number, items_per_page, min_price, max_price, country)
             
             # Check if using sandbox vs production credentials
             if 'SBX' in app_id:
                 # Sandbox environment
                 base_url = "https://api.sandbox.ebay.com/buy/browse/v1/item_summary/search"
                 token_url = "https://api.sandbox.ebay.com/identity/v1/oauth2/token"
-                marketplace_id = "EBAY_US"
-                print("Using eBay SANDBOX environment")
+                # Map country to marketplace ID
+                country_marketplaces = {
+                    'uk': 'EBAY_GB',
+                    'us': 'EBAY_US',
+                    'de': 'EBAY_DE',
+                    'ca': 'EBAY_CA',
+                    'au': 'EBAY_AU',
+                    'fr': 'EBAY_FR',
+                    'it': 'EBAY_IT',
+                    'es': 'EBAY_ES',
+                    'nl': 'EBAY_NL',
+                    'be': 'EBAY_BE',
+                    'at': 'EBAY_AT',
+                    'ch': 'EBAY_CH',
+                    'pl': 'EBAY_PL',
+                    'ie': 'EBAY_IE'
+                }
+                marketplace_id = country_marketplaces.get(country.lower(), 'EBAY_GB')
+                print(f"Using eBay SANDBOX environment for {country.upper()}")
             else:
                 # Production environment
                 base_url = "https://api.ebay.com/buy/browse/v1/item_summary/search"
                 token_url = "https://api.ebay.com/identity/v1/oauth2/token"
-                marketplace_id = "EBAY_US"
-                print("Using eBay PRODUCTION environment")
-                token_url = "https://api.ebay.com/identity/v1/oauth2/token"
-                marketplace_id = "EBAY_US"
+                # Map country to marketplace ID
+                country_marketplaces = {
+                    'uk': 'EBAY_GB',
+                    'us': 'EBAY_US',
+                    'de': 'EBAY_DE',
+                    'ca': 'EBAY_CA',
+                    'au': 'EBAY_AU',
+                    'fr': 'EBAY_FR',
+                    'it': 'EBAY_IT',
+                    'es': 'EBAY_ES',
+                    'nl': 'EBAY_NL',
+                    'be': 'EBAY_BE',
+                    'at': 'EBAY_AT',
+                    'ch': 'EBAY_CH',
+                    'pl': 'EBAY_PL',
+                    'ie': 'EBAY_IE'
+                }
+                marketplace_id = country_marketplaces.get(country.lower(), 'EBAY_GB')
+                print(f"Using eBay PRODUCTION environment for {country.upper()}")
             
             # Get OAuth token for eBay API with retry
             access_token = self.get_ebay_oauth_token_with_retry(app_id, cert_id, token_url)
@@ -514,7 +578,7 @@ class handler(BaseHTTPRequestHandler):
                 
                 # eBay-specific headers
                 'X-EBAY-C-MARKETPLACE-ID': marketplace_id,
-                'Accept-Language': 'en-US',
+                'Accept-Language': 'en-GB' if country.lower() == 'uk' else 'en-US',
                 
                 # Performance optimizations
                 'Accept-Encoding': 'gzip',
@@ -767,7 +831,7 @@ class handler(BaseHTTPRequestHandler):
             print(f"OAuth error: {e}")
             return None
     
-    def scrape_ebay_public_api(self, search_text, page_number=1, items_per_page=50, min_price=None, max_price=None):
+    def scrape_ebay_public_api(self, search_text, page_number=1, items_per_page=50, min_price=None, max_price=None, country='uk'):
         """Use public API or enhanced scraping as fallback"""
         try:
             # Try SerpApi (if available) or other public APIs
@@ -776,8 +840,28 @@ class handler(BaseHTTPRequestHandler):
             # Format search query
             formatted_search = search_text.replace(' ', '+')
             
-            # Use multiple eBay domains to avoid blocking
-            domains = ['www.ebay.com', 'www.ebay.co.uk', 'www.ebay.de']
+            # Use country-specific eBay domain
+            country_domains = {
+                'uk': 'www.ebay.co.uk',
+                'us': 'www.ebay.com',
+                'de': 'www.ebay.de',
+                'ca': 'www.ebay.ca',
+                'au': 'www.ebay.com.au',
+                'fr': 'www.ebay.fr',
+                'it': 'www.ebay.it',
+                'es': 'www.ebay.es',
+                'nl': 'www.ebay.nl',
+                'be': 'www.ebay.be',
+                'at': 'www.ebay.at',
+                'ch': 'www.ebay.ch',
+                'pl': 'www.ebay.pl',
+                'ie': 'www.ebay.ie'
+            }
+            
+            # Try the primary country domain first, then fallback domains
+            primary_domain = country_domains.get(country.lower(), 'www.ebay.co.uk')
+            fallback_domains = ['www.ebay.com', 'www.ebay.co.uk', 'www.ebay.de']
+            domains = [primary_domain] + [d for d in fallback_domains if d != primary_domain]
             
             for domain in domains:
                 try:
@@ -791,7 +875,7 @@ class handler(BaseHTTPRequestHandler):
                     headers = {
                         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
                         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                        'Accept-Language': 'en-US,en;q=0.9',
+                        'Accept-Language': 'en-GB' if country.lower() == 'uk' else 'en-US,en;q=0.9',
                         'Accept-Encoding': 'gzip, deflate',
                         'DNT': '1',
                         'Connection': 'keep-alive',
