@@ -130,7 +130,7 @@ class handler(BaseHTTPRequestHandler):
             country = query_params.get('country', ['uk'])[0]
             
             try:
-                data = self.scrape_ebay_data_robust(search_text, page_number, items_per_page, min_price, max_price, country)
+                data = self.scrape_ebay_working(search_text, page_number, items_per_page, min_price, max_price, country)
                 self.send_json_response(data['products'], data['pagination'])
             except Exception as e:
                 sample_data = self.get_ebay_sample_data()
@@ -494,24 +494,454 @@ class handler(BaseHTTPRequestHandler):
         
         return data
     
+    def scrape_ebay_working(self, search_text, page_number=1, items_per_page=50, min_price=None, max_price=None, country='uk'):
+        """Working eBay scraper that gets real data"""
+        print(f"\n=== WORKING EBAY SCRAPER ===")
+        print(f"Search: {search_text}, Page: {page_number}, Country: {country}")
+        
+        import requests
+        from bs4 import BeautifulSoup
+        import re
+        
+        # Use a simpler approach - get eBay RSS feed or use a simpler endpoint
+        country_domains = {
+            'uk': 'ebay.co.uk',
+            'us': 'ebay.com',
+            'de': 'ebay.de'
+        }
+        
+        domain = country_domains.get(country.lower(), 'ebay.com')
+        formatted_search = search_text.replace(' ', '+')
+        
+        # Try RSS feed approach first (more reliable)
+        rss_url = f"https://www.{domain}/sch/i.html?_nkw={formatted_search}&_rss=1"
+        
+        print(f"🌐 Trying RSS URL: {rss_url}")
+        
+        try:
+            # Try RSS feed first
+            response = requests.get(rss_url, timeout=10, headers={
+                'User-Agent': 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)'
+            })
+            
+            if response.status_code == 200 and 'rss' in response.text.lower():
+                print("✅ RSS feed available - parsing...")
+                return self.parse_ebay_rss(response.text, search_text, page_number, items_per_page)
+            else:
+                print("⚠️ RSS not available, trying direct scraping...")
+                
+                # Fallback to direct scraping with a working approach
+                url = f"https://www.{domain}/sch/i.html?_nkw={formatted_search}&_pgn={page_number}&_ipg={items_per_page}"
+                
+                headers = {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                    'Accept-Language': 'en-GB,en;q=0.9',
+                    'Accept-Encoding': 'gzip, deflate'
+                }
+                
+                response = requests.get(url, headers=headers, timeout=10)
+                print(f"📡 Direct scraping response: {response.status_code}")
+                
+                if response.status_code == 200:
+                    return self.parse_ebay_html(response.text, search_text, page_number, items_per_page)
+                else:
+                    print(f"❌ Failed with status: {response.status_code}")
+                    return self.get_fallback_result(search_text, page_number, items_per_page)
+                    
+        except Exception as e:
+            print(f"❌ Working scraper error: {e}")
+            return self.get_fallback_result(search_text, page_number, items_per_page)
+    
+    def parse_ebay_rss(self, rss_content, search_text, page_number, items_per_page):
+        """Parse eBay RSS feed"""
+        import re
+        from bs4 import BeautifulSoup
+        
+        try:
+            soup = BeautifulSoup(rss_content, 'xml')
+            items = soup.find_all('item')
+            
+            if not items:
+                print("❌ No items in RSS feed")
+                return self.get_fallback_result(search_text, page_number, items_per_page)
+            
+            page_data = []
+            for item in items[:items_per_page]:
+                try:
+                    title_elem = item.find('title')
+                    title = title_elem.text.strip() if title_elem else 'N/A'
+                    
+                    # Extract price from description
+                    desc_elem = item.find('description')
+                    price = 'N/A'
+                    if desc_elem:
+                        desc_text = desc_elem.text
+                        price_match = re.search(r'\$?(\d+(?:,\d{3})*(?:\.\d{2})?)', desc_text)
+                        if price_match:
+                            price_val = float(price_match.group(1).replace(',', ''))
+                            price = f"${price_val:.2f}"
+                    
+                    link_elem = item.find('link')
+                    link = link_elem.text if link_elem else 'N/A'
+                    
+                    page_data.append({
+                        'Title': title,
+                        'Price': price,
+                        'Brand': self.extract_brand_from_title(title),
+                        'Size': 'N/A',
+                        'Image': 'N/A',
+                        'Link': link,
+                        'Condition': 'N/A',
+                        'Seller': 'N/A'
+                    })
+                    
+                except Exception as e:
+                    print(f"Error parsing RSS item: {e}")
+                    continue
+            
+            pagination = {
+                'current_page': page_number,
+                'total_pages': max(1, len(page_data) // items_per_page + 1),
+                'has_more': len(page_data) >= items_per_page,
+                'items_per_page': len(page_data),
+                'total_items': len(page_data) * 10
+            }
+            
+            print(f"✅ RSS parsing successful: {len(page_data)} items")
+            return {'products': page_data, 'pagination': pagination}
+            
+        except Exception as e:
+            print(f"❌ RSS parsing error: {e}")
+            return self.get_fallback_result(search_text, page_number, items_per_page)
+    
+    def parse_ebay_html(self, html_content, search_text, page_number, items_per_page):
+        """Parse eBay HTML with robust extraction"""
+        from bs4 import BeautifulSoup
+        import re
+        
+        try:
+            soup = BeautifulSoup(html_content, 'html.parser')
+            
+            # Look for any element that contains item information
+            # Try multiple approaches
+            items = []
+            
+            # Method 1: Look for common patterns in the HTML
+            html_text = html_content.lower()
+            
+            # Check for item patterns
+            item_patterns = [
+                r'"item":"([^"]+)"',
+                r'title":"([^"]+)"',
+                r'<h3[^>]*>([^<]+)</h3>',
+                r'\$([0-9,]+\.?[0-9]*)'
+            ]
+            
+            # Extract titles
+            titles = re.findall(r'<h3[^>]*class="[^"]*title[^"]*"[^>]*>([^<]+)</h3>', html_content, re.IGNORECASE)
+            titles.extend(re.findall(r'title["\'\s]*:["\'\s]*([^"\'\s>]+)', html_content, re.IGNORECASE))
+            
+            # Extract prices
+            prices = re.findall(r'\$([0-9,]+\.?[0-9]*)', html_content)
+            
+            # Extract links
+            links = re.findall(r'href["\'\s]*=["\'\s]*([^"\'\s>]+ebay[^"\'\s>]*)', html_content, re.IGNORECASE)
+            
+            print(f"Found {len(titles)} titles, {len(prices)} prices, {len(links)} links")
+            
+            # Create items from extracted data
+            page_data = []
+            num_items = min(len(titles), len(prices), len(links), items_per_page)
+            
+            for i in range(num_items):
+                page_data.append({
+                    'Title': titles[i].strip() if i < len(titles) else 'N/A',
+                    'Price': f"${prices[i]}" if i < len(prices) else 'N/A',
+                    'Brand': self.extract_brand_from_title(titles[i]) if i < len(titles) else 'N/A',
+                    'Size': 'N/A',
+                    'Image': 'N/A',
+                    'Link': links[i].strip() if i < len(links) else 'N/A',
+                    'Condition': 'N/A',
+                    'Seller': 'N/A'
+                })
+            
+            pagination = {
+                'current_page': page_number,
+                'total_pages': max(1, len(page_data) // items_per_page + 1),
+                'has_more': len(page_data) >= items_per_page,
+                'items_per_page': len(page_data),
+                'total_items': len(page_data) * 10
+            }
+            
+            print(f"✅ HTML parsing successful: {len(page_data)} items")
+            return {'products': page_data, 'pagination': pagination}
+            
+        except Exception as e:
+            print(f"❌ HTML parsing error: {e}")
+            return self.get_fallback_result(search_text, page_number, items_per_page)
+    
+    def extract_brand_from_title(self, title):
+        """Extract brand from title"""
+        if not title or title == 'N/A':
+            return 'N/A'
+        
+        known_brands = [
+            'Apple', 'Samsung', 'Sony', 'LG', 'Microsoft', 'Dell', 'HP', 'Lenovo', 'Asus', 'Acer',
+            'Nike', 'Adidas', 'Puma', 'Reebok', 'Under Armour', 'New Balance', 'Converse', 'Vans',
+            'Canon', 'Nikon', 'Fujifilm', 'Panasonic', 'Olympus', 'GoPro', 'DJI',
+            'Toyota', 'Honda', 'Ford', 'BMW', 'Mercedes', 'Audi', 'Tesla', 'Hyundai', 'Kia'
+        ]
+        
+        title_lower = title.lower()
+        for brand in known_brands:
+            if brand.lower() in title_lower:
+                return brand
+        
+        return 'N/A'
+    
+    def get_fallback_result(self, search_text, page_number, items_per_page):
+        """Generate fallback result with realistic data"""
+        # Create realistic-looking but clearly marked as sample data
+        sample_items = [
+            {
+                'Title': f'{search_text.title()} - Sample Item 1 (Demo Data)',
+                'Price': '$99.99',
+                'Brand': 'Sample',
+                'Size': 'N/A',
+                'Image': 'N/A',
+                'Link': f'https://ebay.com/sch/i.html?_nkw={search_text}',
+                'Condition': 'New',
+                'Seller': 'Demo Seller'
+            },
+            {
+                'Title': f'{search_text.title()} - Sample Item 2 (Demo Data)',
+                'Price': '$149.99',
+                'Brand': 'Sample',
+                'Size': 'N/A',
+                'Image': 'N/A',
+                'Link': f'https://ebay.com/sch/i.html?_nkw={search_text}',
+                'Condition': 'Used',
+                'Seller': 'Demo Seller'
+            }
+        ]
+        
+        pagination = {
+            'current_page': page_number,
+            'total_pages': 1,
+            'has_more': False,
+            'items_per_page': len(sample_items),
+            'total_items': len(sample_items)
+        }
+        
+        print("⚠️ Returning fallback demo data")
+        return {'products': sample_items, 'pagination': pagination}
+    
+    def scrape_ebay_direct(self, search_text, page_number=1, items_per_page=50, min_price=None, max_price=None, country='uk'):
+        """Direct eBay web scraping with updated selectors"""
+        print(f"\n=== DIRECT EBAY SCRAPING ===")
+        print(f"Search: {search_text}, Page: {page_number}, Country: {country}")
+        
+        import requests
+        from bs4 import BeautifulSoup
+        import time
+        import random
+        
+        # Map country to eBay domain
+        country_domains = {
+            'uk': 'ebay.co.uk',
+            'us': 'ebay.com',
+            'de': 'ebay.de'
+        }
+        
+        domain = country_domains.get(country.lower(), 'ebay.com')
+        formatted_search = search_text.replace(' ', '+')
+        
+        # Enhanced headers to look like real browser
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+            'Accept-Language': 'en-GB,en;q=0.9,en-US;q=0.8',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'DNT': '1',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1',
+            'Cache-Control': 'max-age=0'
+        }
+        
+        # Build URL
+        url = f"https://{domain}/sch/i.html?_nkw={formatted_search}&_pgn={page_number}&_ipg={items_per_page}"
+        
+        print(f"🌐 Scraping URL: {url}")
+        
+        try:
+            response = requests.get(url, headers=headers, timeout=15)
+            print(f"📡 Response status: {response.status_code}")
+            
+            if response.status_code == 200:
+                soup = BeautifulSoup(response.content, 'html.parser')
+                
+                # Updated selectors for current eBay structure
+                item_selectors = [
+                    'li.s-item',
+                    'div.s-item__wrapper',
+                    'div.s-item',
+                    '[class*="s-item"]',
+                    '.b-list__items__item'
+                ]
+                
+                items = []
+                for selector in item_selectors:
+                    found_items = soup.select(selector)
+                    if found_items:
+                        print(f"✅ Found {len(found_items)} items with selector: {selector}")
+                        items = found_items
+                        break
+                
+                if not items:
+                    print("❌ No items found - checking page structure")
+                    # Look for any elements that might contain listings
+                    all_divs = soup.find_all('div', class_=True)
+                    print(f"Found {len(all_divs)} divs with classes")
+                    for i, div in enumerate(all_divs[:5]):
+                        classes = div.get('class', [])
+                        print(f"  Div {i}: {classes}")
+                    
+                    # Check if we're on a different page type
+                    page_title = soup.find('title')
+                    if page_title:
+                        print(f"Page title: {page_title.get_text()[:100]}")
+                    
+                    return {'products': [], 'pagination': {'current_page': 1, 'total_pages': 1, 'has_more': False}}
+                
+                # Extract data from first few items
+                page_data = []
+                for i, item in enumerate(items[:items_per_page]):
+                    print(f"📦 Extracting item {i+1}...")
+                    
+                    # Try multiple title selectors
+                    title_selectors = [
+                        'h3.s-item__title',
+                        '.s-item__title',
+                        'h3[itemprop="name"]',
+                        'a.s-item__link span',
+                        '.s-item__title a'
+                    ]
+                    
+                    title = 'N/A'
+                    for selector in title_selectors:
+                        title_elem = item.select_one(selector)
+                        if title_elem:
+                            title = title_elem.get_text(strip=True)
+                            if title and len(title) > 5:
+                                print(f"   ✅ Title: {title[:50]}...")
+                                break
+                    
+                    if title == 'N/A':
+                        print("   ❌ Title: NOT FOUND")
+                    
+                    # Try multiple price selectors
+                    price_selectors = [
+                        'span.s-item__price',
+                        '.s-item__price',
+                        'span[itemprop="price"]',
+                        '.s-item__details span'
+                    ]
+                    
+                    price = 'N/A'
+                    for selector in price_selectors:
+                        price_elem = item.select_one(selector)
+                        if price_elem:
+                            price = price_elem.get_text(strip=True)
+                            if price and any(c.isdigit() for c in price):
+                                print(f"   ✅ Price: {price}")
+                                break
+                    
+                    if price == 'N/A':
+                        print("   ❌ Price: NOT FOUND")
+                    
+                    # Try multiple link selectors
+                    link_selectors = [
+                        'a.s-item__link',
+                        '.s-item__link',
+                        'a[itemprop="url"]',
+                        'h3.s-item__title a'
+                    ]
+                    
+                    link = 'N/A'
+                    for selector in link_selectors:
+                        link_elem = item.select_one(selector)
+                        if link_elem:
+                            href = link_elem.get('href', '')
+                            if href and any(domain in href for domain in ['ebay.com', 'ebay.co.uk', 'ebay.de']):
+                                link = href
+                                print(f"   ✅ Link: {link[:50]}...")
+                                break
+                    
+                    if link == 'N/A':
+                        print("   ❌ Link: NOT FOUND")
+                    
+                    page_data.append({
+                        'Title': title,
+                        'Price': price,
+                        'Brand': 'N/A',
+                        'Size': 'N/A',
+                        'Image': 'N/A',
+                        'Link': link,
+                        'Condition': 'N/A',
+                        'Seller': 'N/A'
+                    })
+                
+                pagination = {
+                    'current_page': page_number,
+                    'total_pages': 10,
+                    'has_more': True,
+                    'items_per_page': len(page_data),
+                    'total_items': len(page_data) * 10
+                }
+                
+                result = {
+                    'products': page_data,
+                    'pagination': pagination
+                }
+                
+                print(f"✅ Successfully extracted {len(page_data)} real eBay items")
+                return result
+            else:
+                print(f"❌ HTTP Error: {response.status_code}")
+                return {'products': [], 'pagination': {'current_page': 1, 'total_pages': 1, 'has_more': False}}
+                
+        except Exception as e:
+            print(f"❌ Direct scraping error: {e}")
+            import traceback
+            traceback.print_exc()
+            return {'products': [], 'pagination': {'current_page': 1, 'total_pages': 1, 'has_more': False}}
+    
     def scrape_ebay_data_robust(self, search_text, page_number=1, items_per_page=50, min_price=None, max_price=None, country='uk'):
         """Robust eBay scraping with dual approach: API first, public scraping fallback"""
+        print(f"\n=== STARTING ROBUST EBAY SCRAPING ===")
+        print(f"Search: {search_text}, Page: {page_number}, Country: {country}")
+        
         # Create cache key
         cache_key = f"ebay_robust_{search_text}_{page_number}_{items_per_page}_{min_price}_{max_price}_{country}"
         
         # Check cache first
         cached_result = cache_manager.get(cache_key)
         if cached_result:
-            print(f"Returning cached robust result for {search_text}")
+            print(f"✅ Returning cached robust result for {search_text}")
             return cached_result
-        
-        print(f"Robust eBay scraping: {search_text}, page {page_number}, country {country}")
         
         # Method 1: Try eBay API if credentials are available and valid
         api_result = None
         try:
             app_id = os.environ.get('EBAY_APP_ID')
             cert_id = os.environ.get('EBAY_CERT_ID')
+            
+            print(f"🔍 Checking credentials: APP_ID exists={bool(app_id)}, CERT_ID exists={bool(cert_id)}")
             
             # Validate credentials
             if (app_id and cert_id and 
@@ -526,6 +956,8 @@ class handler(BaseHTTPRequestHandler):
                     first_item = api_result['data'][0]
                     title_quality = len(first_item.get('Title', '')) > 10
                     price_quality = first_item.get('Price', 'N/A') != 'N/A'
+                    
+                    print(f"📊 API Quality Check: Title={title_quality}, Price={price_quality}")
                     
                     if title_quality and price_quality:
                         print("✅ eBay API successful with high-quality data")
@@ -546,7 +978,7 @@ class handler(BaseHTTPRequestHandler):
             public_result = self.scrape_ebay_public_api_enhanced(search_text, page_number, items_per_page, min_price, max_price, country)
             
             if public_result and public_result.get('data'):
-                print("✅ Enhanced eBay public scraping successful")
+                print(f"✅ Enhanced public scraping successful - got {len(public_result['data'])} items")
                 cache_manager.set(cache_key, public_result)
                 return public_result
             else:
@@ -560,7 +992,7 @@ class handler(BaseHTTPRequestHandler):
             basic_result = self.scrape_ebay_public_api(search_text, page_number, items_per_page, min_price, max_price, country)
             
             if basic_result and basic_result.get('data'):
-                print("✅ Basic eBay public scraping successful")
+                print(f"✅ Basic public scraping successful - got {len(basic_result['data'])} items")
                 cache_manager.set(cache_key, basic_result)
                 return basic_result
             else:
