@@ -4,6 +4,90 @@ import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse, parse_qs
 import re
+import os
+import base64
+import time
+import threading
+from collections import defaultdict
+from datetime import datetime, timedelta
+
+# Load environment variables from .env file
+try:
+    with open('../.env', 'r') as env_file:
+        for line in env_file:
+            if line.strip() and not line.startswith('#'):
+                key, value = line.strip().split('=', 1)
+                if key.startswith('export '):
+                    key = key[7:]  # Remove 'export ' prefix
+                os.environ[key] = value.strip('"')
+except Exception as e:
+    print(f"Could not load .env file: {e}")
+
+class RateLimiter:
+    """Rate limiter to prevent 429 errors"""
+    def __init__(self, max_requests_per_minute=60):
+        self.max_requests = max_requests_per_minute
+        self.requests = defaultdict(list)
+        self.lock = threading.Lock()
+    
+    def is_allowed(self, identifier):
+        """Check if request is allowed"""
+        with self.lock:
+            now = time.time()
+            # Clean old requests (older than 1 minute)
+            self.requests[identifier] = [
+                req_time for req_time in self.requests[identifier]
+                if now - req_time < 60
+            ]
+            
+            # Check if under limit
+            if len(self.requests[identifier]) < self.max_requests:
+                self.requests[identifier].append(now)
+                return True
+            
+            return False
+    
+    def wait_time(self, identifier):
+        """Get wait time until next allowed request"""
+        with self.lock:
+            if not self.requests[identifier]:
+                return 0
+            
+            oldest_request = min(self.requests[identifier])
+            wait_until = oldest_request + 60
+            return max(0, wait_until - time.time())
+
+class CacheManager:
+    """Simple cache to reduce API calls"""
+    def __init__(self, cache_duration_minutes=5):
+        self.cache = {}
+        self.cache_duration = cache_duration_minutes * 60
+        self.lock = threading.Lock()
+    
+    def get(self, key):
+        """Get cached response"""
+        with self.lock:
+            if key in self.cache:
+                data, timestamp = self.cache[key]
+                if time.time() - timestamp < self.cache_duration:
+                    return data
+                else:
+                    del self.cache[key]
+            return None
+    
+    def set(self, key, data):
+        """Cache response"""
+        with self.lock:
+            self.cache[key] = (data, time.time())
+    
+    def clear(self):
+        """Clear cache"""
+        with self.lock:
+            self.cache.clear()
+
+# Global rate limiter and cache
+rate_limiter = RateLimiter(max_requests_per_minute=30)  # Conservative limit
+cache_manager = CacheManager(cache_duration_minutes=5)
 
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -34,6 +118,22 @@ class handler(BaseHTTPRequestHandler):
             else:
                 # HTML request - serve enhanced UI
                 self.send_html_response()
+        elif parsed_path.path == '/ebay':
+            # eBay scraping endpoint
+            query_params = parse_qs(parsed_path.query)
+            search_text = query_params.get('search', ['laptop'])[0]
+            page_number = int(query_params.get('page', ['1'])[0])
+            items_per_page = int(query_params.get('items_per_page', ['50'])[0])
+            min_price = query_params.get('min_price', [None])[0]
+            max_price = query_params.get('max_price', [None])[0]
+            
+            try:
+                data = self.scrape_ebay_data(search_text, page_number, items_per_page, min_price, max_price)
+                self.send_json_response(data['products'], data['pagination'])
+            except Exception as e:
+                sample_data = self.get_ebay_sample_data()
+                pagination = {'current_page': 1, 'total_pages': 1, 'has_more': False, 'items_per_page': len(sample_data), 'total_items': len(sample_data)}
+                self.send_json_response(sample_data, pagination, error=str(e))
         else:
             self.send_http_response(404, 'Not Found')
     
@@ -334,6 +434,748 @@ class handler(BaseHTTPRequestHandler):
                     break
         
         return data
+    
+    def scrape_ebay_data(self, search_text, page_number=1, items_per_page=50, min_price=None, max_price=None):
+        """Scrape data from eBay using eBay Browse API with rate limiting and caching"""
+        # Create cache key
+        cache_key = f"ebay_{search_text}_{page_number}_{items_per_page}_{min_price}_{max_price}"
+        
+        # Check cache first
+        cached_result = cache_manager.get(cache_key)
+        if cached_result:
+            print(f"Cache hit for: {cache_key}")
+            return cached_result
+        
+        # Rate limiting check
+        client_ip = self.client_address[0] if hasattr(self, 'client_address') else 'default'
+        if not rate_limiter.is_allowed(client_ip):
+            wait_time = rate_limiter.wait_time(client_ip)
+            print(f"Rate limit exceeded for {client_ip}. Waiting {wait_time:.2f} seconds")
+            time.sleep(wait_time)
+            
+            # Return rate limited response
+            pagination = {
+                'current_page': page_number,
+                'total_pages': 1,
+                'has_more': False,
+                'items_per_page': 0,
+                'total_items': 0,
+                'start_index': 0,
+                'end_index': 0
+            }
+            return {
+                'products': [],
+                'pagination': pagination,
+                'error': 'Rate limit exceeded. Please try again later.'
+            }
+        
+        try:
+            # eBay API configuration
+            app_id = os.environ.get('EBAY_APP_ID', 'mahmoude-au-SBX-3b451c5e7-ded9f7d8')  # Set your eBay App ID
+            cert_id = os.environ.get('EBAY_CERT_ID', 'SBX-b451c5e7289f-258d-4b8a-a65e-d1cf')  # Set your eBay Cert ID
+            
+            # For demo purposes, if no API keys are provided, use a public API endpoint
+            if app_id == 'YOUR_APP_ID':
+                # Use a public eBay-compatible API or fallback to enhanced scraping
+                return self.scrape_ebay_public_api(search_text, page_number, items_per_page, min_price, max_price)
+            
+            # Check if using sandbox credentials
+            if 'SBX' in app_id:
+                # Use sandbox environment
+                base_url = "https://api.sandbox.ebay.com/buy/browse/v1/item_summary/search"
+                token_url = "https://api.sandbox.ebay.com/identity/v1/oauth2/token"
+                marketplace_id = "EBAY_US"
+            else:
+                # Use production environment
+                base_url = "https://api.ebay.com/buy/browse/v1/item_summary/search"
+                token_url = "https://api.ebay.com/identity/v1/oauth2/token"
+                marketplace_id = "EBAY_US"
+            
+            # Get OAuth token for eBay API with retry
+            access_token = self.get_ebay_oauth_token_with_retry(app_id, cert_id, token_url)
+            
+            if not access_token:
+                raise Exception("Failed to get eBay API access token")
+            
+            # Construct API request
+            headers = {
+                'Authorization': f'Bearer {access_token}',
+                'Content-Type': 'application/json',
+                'X-EBAY-C-MARKETPLACE-ID': marketplace_id,
+                'Accept-Language': 'en-US',
+                'User-Agent': 'eBay-API-Client/1.0'
+            }
+            
+            params = {
+                'q': search_text,
+                'limit': min(items_per_page, 50),
+                'offset': (page_number - 1) * items_per_page
+            }
+            
+            # Add price filters if specified
+            filters = []
+            if min_price is not None and max_price is not None:
+                filters.append(f'price:[{min_price}..{max_price}]')
+            elif min_price is not None:
+                filters.append(f'price:[{min_price}..]')
+            elif max_price is not None:
+                filters.append(f'price:[..{max_price}]')
+            
+            if filters:
+                params['filter'] = ','.join(filters)
+            
+            # Make API request with retry
+            response = self.make_api_request_with_retry(base_url, headers, params)
+            
+            if response and response.status_code == 200:
+                data = response.json()
+                
+                # Extract items from API response
+                items = data.get('itemSummaries', [])
+                page_data = []
+                
+                for item in items:
+                    try:
+                        item_data = self.extract_ebay_api_item(item)
+                        if item_data['Title'] != 'N/A':
+                            page_data.append(item_data)
+                    except Exception as e:
+                        continue
+                
+                # Calculate pagination
+                total_items = data.get('total', len(page_data))
+                total_pages = (total_items + items_per_page - 1) // items_per_page
+                has_more = page_number < total_pages
+                
+                pagination = {
+                    'current_page': page_number,
+                    'total_pages': total_pages,
+                    'has_more': has_more,
+                    'items_per_page': items_per_page,
+                    'total_items': total_items,
+                    'start_index': (page_number - 1) * items_per_page,
+                    'end_index': min(page_number * items_per_page, total_items)
+                }
+                
+                result = {
+                    'products': page_data,
+                    'pagination': pagination
+                }
+                
+                # Cache the result
+                cache_manager.set(cache_key, result)
+                
+                return result
+            elif response and response.status_code == 429:
+                # Rate limited by eBay API
+                retry_after = int(response.headers.get('Retry-After', 60))
+                print(f"eBay API rate limited. Retry after {retry_after} seconds")
+                
+                pagination = {
+                    'current_page': page_number,
+                    'total_pages': 1,
+                    'has_more': False,
+                    'items_per_page': 0,
+                    'total_items': 0,
+                    'start_index': 0,
+                    'end_index': 0
+                }
+                return {
+                    'products': [],
+                    'pagination': pagination,
+                    'error': f'API rate limit exceeded. Retry after {retry_after} seconds.'
+                }
+            else:
+                error_msg = f"eBay API error: {response.status_code}"
+                if response:
+                    error_msg += f" - {response.text}"
+                print(error_msg)
+                raise Exception(error_msg)
+                
+        except Exception as e:
+            print(f"Error with eBay API: {e}")
+            # Fallback to public API
+            return self.scrape_ebay_public_api(search_text, page_number, items_per_page, min_price, max_price)
+    
+    def make_api_request_with_retry(self, url, headers, params, max_retries=3):
+        """Make API request with retry logic"""
+        for attempt in range(max_retries):
+            try:
+                response = requests.get(url, headers=headers, params=params, timeout=15)
+                
+                # Handle different status codes
+                if response.status_code == 200:
+                    return response
+                elif response.status_code == 429:
+                    retry_after = int(response.headers.get('Retry-After', 60))
+                    if attempt < max_retries - 1:
+                        print(f"Rate limited. Retrying in {retry_after} seconds... (attempt {attempt + 1}/{max_retries})")
+                        time.sleep(retry_after)
+                        continue
+                    else:
+                        return response
+                elif response.status_code in [500, 502, 503, 504]:
+                    # Server errors - retry with exponential backoff
+                    if attempt < max_retries - 1:
+                        backoff_time = (2 ** attempt) + 1  # 2, 5, 9 seconds
+                        print(f"Server error {response.status_code}. Retrying in {backoff_time} seconds... (attempt {attempt + 1}/{max_retries})")
+                        time.sleep(backoff_time)
+                        continue
+                    else:
+                        return response
+                else:
+                    return response
+                    
+            except requests.exceptions.RequestException as e:
+                if attempt < max_retries - 1:
+                    backoff_time = (2 ** attempt) + 1
+                    print(f"Request error: {e}. Retrying in {backoff_time} seconds... (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(backoff_time)
+                    continue
+                else:
+                    raise e
+        
+        return None
+    
+    def get_ebay_oauth_token_with_retry(self, app_id, cert_id, token_url, max_retries=3):
+        """Get OAuth token with retry logic"""
+        for attempt in range(max_retries):
+            try:
+                # Prepare credentials
+                credentials = f"{app_id}:{cert_id}"
+                encoded_credentials = base64.b64encode(credentials.encode()).decode()
+                
+                headers = {
+                    'Authorization': f'Basic {encoded_credentials}',
+                    'Content-Type': 'application/x-www-form-urlencoded'
+                }
+                
+                data = {
+                    'grant_type': 'client_credentials',
+                    'scope': 'https://api.ebay.com/oauth/api_scope'
+                }
+                
+                response = requests.post(token_url, headers=headers, data=data, timeout=10)
+                
+                if response.status_code == 200:
+                    token_data = response.json()
+                    return token_data.get('access_token')
+                elif response.status_code == 429:
+                    retry_after = int(response.headers.get('Retry-After', 60))
+                    if attempt < max_retries - 1:
+                        print(f"OAuth rate limited. Retrying in {retry_after} seconds... (attempt {attempt + 1}/{max_retries})")
+                        time.sleep(retry_after)
+                        continue
+                    else:
+                        return None
+                else:
+                    print(f"OAuth error: {response.status_code} - {response.text}")
+                    if attempt < max_retries - 1:
+                        time.sleep(5)
+                        continue
+                    else:
+                        return None
+                        
+            except Exception as e:
+                if attempt < max_retries - 1:
+                    print(f"OAuth error: {e}. Retrying... (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(5)
+                    continue
+                else:
+                    return None
+        
+        return None
+    
+    def get_ebay_oauth_token(self, app_id, cert_id, token_url="https://api.ebay.com/identity/v1/oauth2/token"):
+        """Get OAuth token for eBay API"""
+        try:
+            # Prepare credentials
+            credentials = f"{app_id}:{cert_id}"
+            encoded_credentials = base64.b64encode(credentials.encode()).decode()
+            
+            headers = {
+                'Authorization': f'Basic {encoded_credentials}',
+                'Content-Type': 'application/x-www-form-urlencoded'
+            }
+            
+            data = {
+                'grant_type': 'client_credentials',
+                'scope': 'https://api.ebay.com/oauth/api_scope'
+            }
+            
+            response = requests.post(token_url, headers=headers, data=data, timeout=10)
+            
+            if response.status_code == 200:
+                token_data = response.json()
+                return token_data.get('access_token')
+            else:
+                print(f"OAuth error: {response.status_code} - {response.text}")
+                return None
+                
+        except Exception as e:
+            print(f"OAuth error: {e}")
+            return None
+    
+    def scrape_ebay_public_api(self, search_text, page_number=1, items_per_page=50, min_price=None, max_price=None):
+        """Use public API or enhanced scraping as fallback"""
+        try:
+            # Try SerpApi (if available) or other public APIs
+            # For now, use enhanced web scraping with better techniques
+            
+            # Format search query
+            formatted_search = search_text.replace(' ', '+')
+            
+            # Use multiple eBay domains to avoid blocking
+            domains = ['www.ebay.com', 'www.ebay.co.uk', 'www.ebay.de']
+            
+            for domain in domains:
+                try:
+                    url = f"https://{domain}/sch/i.html?_nkw={formatted_search}&_pgn={page_number}&_ipg={items_per_page}"
+                    
+                    if min_price is not None:
+                        url += f"&_udlo={min_price}"
+                    if max_price is not None:
+                        url += f"&_udhi={max_price}"
+                    
+                    headers = {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                        'Accept-Language': 'en-US,en;q=0.9',
+                        'Accept-Encoding': 'gzip, deflate',
+                        'DNT': '1',
+                        'Connection': 'keep-alive',
+                        'Upgrade-Insecure-Requests': '1'
+                    }
+                    
+                    response = requests.get(url, headers=headers, timeout=10)
+                    
+                    if response.status_code == 200:
+                        soup = BeautifulSoup(response.content, 'html.parser')
+                        
+                        # Check if we're being blocked
+                        if 'Pardon Our Interruption' in soup.get_text():
+                            continue  # Try next domain
+                        
+                        # Find items with multiple selector strategies
+                        items = []
+                        selectors = [
+                            'div.s-item__wrapper',
+                            'li.s-item',
+                            '.s-item'
+                        ]
+                        
+                        for selector in selectors:
+                            items = soup.select(selector)
+                            if items:
+                                break
+                        
+                        if not items:
+                            continue
+                        
+                        all_data = []
+                        for item in items:
+                            try:
+                                data_dict = self.extract_ebay_item_data(item)
+                                if data_dict['Title'] != 'N/A' and data_dict['Price'] != 'N/A':
+                                    all_data.append(data_dict)
+                            except:
+                                continue
+                        
+                        if all_data:
+                            # Apply pagination
+                            start_idx = (page_number - 1) * items_per_page
+                            end_idx = start_idx + items_per_page
+                            paginated_data = all_data[start_idx:end_idx]
+                            
+                            pagination = {
+                                'current_page': page_number,
+                                'total_pages': page_number + 1,  # Estimate
+                                'has_more': len(all_data) > end_idx,
+                                'items_per_page': items_per_page,
+                                'total_items': len(all_data),
+                                'start_index': start_idx,
+                                'end_index': min(end_idx, len(all_data))
+                            }
+                            
+                            return {
+                                'products': paginated_data,
+                                'pagination': pagination
+                            }
+                
+                except Exception as e:
+                    print(f"Error with {domain}: {e}")
+                    continue
+            
+            # If all domains fail, raise exception
+            raise Exception("All eBay domains blocked or unavailable")
+            
+        except Exception as e:
+            print(f"Public API error: {e}")
+            raise e
+    
+    def extract_ebay_api_item(self, item):
+        """Extract data from eBay API response item"""
+        data = {
+            'Title': 'N/A',
+            'Price': 'N/A',
+            'Brand': 'N/A',
+            'Size': 'N/A',
+            'Image': 'N/A',
+            'Link': 'N/A',
+            'Condition': 'N/A',
+            'Seller': 'N/A'
+        }
+        
+        try:
+            # Extract title
+            if 'title' in item:
+                data['Title'] = item['title']
+            
+            # Extract price
+            if 'price' in item:
+                price = item['price']
+                if 'value' in price:
+                    data['Price'] = f"${price['value']}"
+            
+            # Extract image
+            if 'image' in item:
+                data['Image'] = item['image']['imageUrl']
+            
+            # Extract link
+            if 'itemWebUrl' in item:
+                data['Link'] = item['itemWebUrl']
+            
+            # Extract condition
+            if 'condition' in item:
+                data['Condition'] = item['condition']
+            
+            # Extract brand from title
+            if data['Title'] != 'N/A':
+                known_brands = [
+                    'Apple', 'Samsung', 'Sony', 'LG', 'Microsoft', 'Dell', 'HP', 'Lenovo', 'Asus', 'Acer',
+                    'Nike', 'Adidas', 'Puma', 'Reebok', 'Under Armour', 'New Balance', 'Converse', 'Vans',
+                    'Canon', 'Nikon', 'Fujifilm', 'Panasonic', 'Olympus', 'GoPro', 'DJI',
+                    'Toyota', 'Honda', 'Ford', 'BMW', 'Mercedes', 'Audi', 'Tesla', 'Hyundai', 'Kia',
+                    'Louis Vuitton', 'Gucci', 'Prada', 'Chanel', 'Hermes', 'Rolex', 'Omega', 'Cartier',
+                    'Levi\'s', 'Gap', 'H&M', 'Zara', 'Uniqlo', 'Calvin Klein', 'Tommy Hilfiger',
+                    'Nintendo', 'Xbox', 'PlayStation', 'Sega', 'Atari', 'Razer', 'Logitech'
+                ]
+                
+                title_lower = data['Title'].lower()
+                for brand in known_brands:
+                    if brand.lower() in title_lower:
+                        data['Brand'] = brand
+                        break
+            
+            # Extract size from title
+            if data['Title'] != 'N/A':
+                import re
+                size_patterns = [
+                    r'\b(XS|S|M|L|XL|XXL|3XL|4XL)\b',
+                    r'\b(\d{1,2})\s*(?:inch|in|"|)\b',
+                    r'\b(\d{1,3})\s*(?:cm|mm)\b',
+                    r'\bSize\s*(\d+[A-Z]?)\b'
+                ]
+                
+                for pattern in size_patterns:
+                    match = re.search(pattern, data['Title'], re.IGNORECASE)
+                    if match:
+                        data['Size'] = match.group(1)
+                        break
+        
+        except Exception as e:
+            print(f"Error extracting eBay API item: {e}")
+        
+        return data
+    
+    def extract_ebay_item_data(self, item):
+        """Extract real data from eBay item"""
+        data = {
+            'Title': 'N/A',
+            'Price': 'N/A',
+            'Brand': 'N/A',
+            'Size': 'N/A',
+            'Image': 'N/A',
+            'Link': 'N/A',
+            'Condition': 'N/A',
+            'Seller': 'N/A'
+        }
+        
+        try:
+            # Extract title - try multiple selectors
+            title_selectors = [
+                'h3.s-item__title',
+                '.s-item__title',
+                'h3[itemprop="name"]',
+                '.s-item__title--tag'
+            ]
+            
+            for selector in title_selectors:
+                title_elem = item.select_one(selector)
+                if title_elem:
+                    title_text = title_elem.get_text(strip=True)
+                    if title_text and title_text != 'New Listing' and len(title_text) > 5:
+                        data['Title'] = title_text
+                        break
+            
+            # Extract price - try multiple selectors
+            price_selectors = [
+                'span.s-item__price',
+                '.s-item__price',
+                'span[itemprop="price"]',
+                '.s-item__detail--primary'
+            ]
+            
+            for selector in price_selectors:
+                price_elem = item.select_one(selector)
+                if price_elem:
+                    price_text = price_elem.get_text(strip=True)
+                    if price_text and '$' in price_text:
+                        data['Price'] = price_text
+                        break
+            
+            # Extract link - try multiple selectors
+            link_selectors = [
+                'a.s-item__link',
+                '.s-item__link',
+                'a[itemprop="url"]'
+            ]
+            
+            for selector in link_selectors:
+                link_elem = item.select_one(selector)
+                if link_elem:
+                    href = link_elem.get('href', '')
+                    if href and 'ebay.com' in href:
+                        data['Link'] = href
+                        break
+            
+            # Extract image - try multiple selectors
+            img_selectors = [
+                'img.s-item__image-img',
+                '.s-item__image-img',
+                'img[itemprop="image"]',
+                '.s-item__image--fallback'
+            ]
+            
+            for selector in img_selectors:
+                img_elem = item.select_one(selector)
+                if img_elem:
+                    src = img_elem.get('src', '') or img_elem.get('data-src', '') or img_elem.get('data-original', '')
+                    if src and 'ebayimg.com' in src:
+                        data['Image'] = src
+                        break
+            
+            # Extract condition - try multiple selectors
+            condition_selectors = [
+                'span.SECONDARY_INFO',
+                '.s-item__subtitle',
+                '.s-item__condition',
+                'span[itemprop="itemCondition"]'
+            ]
+            
+            for selector in condition_selectors:
+                condition_elem = item.select_one(selector)
+                if condition_elem:
+                    condition_text = condition_elem.get_text(strip=True)
+                    if condition_text and len(condition_text) < 50:
+                        data['Condition'] = condition_text
+                        break
+            
+            # Extract seller info
+            seller_selectors = [
+                'span.s-item__seller-info-text',
+                '.s-item__seller-info-text',
+                '.s-item__seller-info'
+            ]
+            
+            for selector in seller_selectors:
+                seller_elem = item.select_one(selector)
+                if seller_elem:
+                    seller_text = seller_elem.get_text(strip=True)
+                    if seller_text and len(seller_text) < 100:
+                        data['Seller'] = seller_text
+                        break
+            
+            # Extract brand from title
+            if data['Title'] != 'N/A':
+                known_brands = [
+                    'Apple', 'Samsung', 'Sony', 'LG', 'Microsoft', 'Dell', 'HP', 'Lenovo', 'Asus', 'Acer',
+                    'Nike', 'Adidas', 'Puma', 'Reebok', 'Under Armour', 'New Balance', 'Converse', 'Vans',
+                    'Canon', 'Nikon', 'Fujifilm', 'Panasonic', 'Olympus', 'GoPro', 'DJI',
+                    'Toyota', 'Honda', 'Ford', 'BMW', 'Mercedes', 'Audi', 'Tesla', 'Hyundai', 'Kia',
+                    'Louis Vuitton', 'Gucci', 'Prada', 'Chanel', 'Hermes', 'Rolex', 'Omega', 'Cartier',
+                    'Levi\'s', 'Gap', 'H&M', 'Zara', 'Uniqlo', 'Calvin Klein', 'Tommy Hilfiger',
+                    'Nintendo', 'Xbox', 'PlayStation', 'Sega', 'Atari', 'Razer', 'Logitech'
+                ]
+                
+                title_lower = data['Title'].lower()
+                for brand in known_brands:
+                    if brand.lower() in title_lower:
+                        data['Brand'] = brand
+                        break
+            
+            # Extract size from title if applicable
+            if data['Title'] != 'N/A':
+                import re
+                size_patterns = [
+                    r'\b(XS|S|M|L|XL|XXL|3XL|4XL)\b',
+                    r'\b(\d{1,2})\s*(?:inch|in|"|)\b',
+                    r'\b(\d{1,3})\s*(?:cm|mm)\b',
+                    r'\bSize\s*(\d+[A-Z]?)\b',
+                    r'\b(\d{1,2})\s*[Ww]omen?\b',
+                    r'\b(\d{1,2})\s*[Mm]en?\b'
+                ]
+                
+                for pattern in size_patterns:
+                    match = re.search(pattern, data['Title'], re.IGNORECASE)
+                    if match:
+                        data['Size'] = match.group(1)
+                        break
+        
+        except Exception as e:
+            print(f"Error extracting eBay item data: {e}")
+        
+        return data
+    
+    def extract_ebay_rss_item(self, item):
+        """Extract data from eBay RSS item"""
+        data = {
+            'Title': 'N/A',
+            'Price': 'N/A',
+            'Brand': 'N/A',
+            'Size': 'N/A',
+            'Image': 'N/A',
+            'Link': 'N/A',
+            'Condition': 'N/A',
+            'Seller': 'N/A'
+        }
+        
+        try:
+            # Extract title
+            title_elem = item.find('title')
+            if title_elem is not None:
+                title_text = title_elem.text.strip()
+                if title_text:
+                    data['Title'] = title_text
+            
+            # Extract link
+            link_elem = item.find('link')
+            if link_elem is not None:
+                link_text = link_elem.text.strip()
+                if link_text:
+                    data['Link'] = link_text
+            
+            # Extract description (contains price and other info)
+            desc_elem = item.find('description')
+            if desc_elem is not None:
+                desc_text = desc_elem.text.strip()
+                
+                # Extract price from description
+                import re
+                price_match = re.search(r'\$(\d+(?:,\d{3})*(?:\.\d{2})?)', desc_text)
+                if price_match:
+                    data['Price'] = f"${price_match.group(1)}"
+                
+                # Extract condition
+                condition_match = re.search(r'Condition:\s*([^<]+)', desc_text)
+                if condition_match:
+                    data['Condition'] = condition_match.group(1).strip()
+            
+            # Extract brand from title
+            if data['Title'] != 'N/A':
+                known_brands = [
+                    'Apple', 'Samsung', 'Sony', 'LG', 'Microsoft', 'Dell', 'HP', 'Lenovo', 'Asus', 'Acer',
+                    'Nike', 'Adidas', 'Puma', 'Reebok', 'Under Armour', 'New Balance', 'Converse', 'Vans',
+                    'Canon', 'Nikon', 'Fujifilm', 'Panasonic', 'Olympus', 'GoPro', 'DJI',
+                    'Toyota', 'Honda', 'Ford', 'BMW', 'Mercedes', 'Audi', 'Tesla', 'Hyundai', 'Kia',
+                    'Louis Vuitton', 'Gucci', 'Prada', 'Chanel', 'Hermes', 'Rolex', 'Omega', 'Cartier',
+                    'Levi\'s', 'Gap', 'H&M', 'Zara', 'Uniqlo', 'Calvin Klein', 'Tommy Hilfiger',
+                    'Nintendo', 'Xbox', 'PlayStation', 'Sega', 'Atari', 'Razer', 'Logitech'
+                ]
+                
+                title_lower = data['Title'].lower()
+                for brand in known_brands:
+                    if brand.lower() in title_lower:
+                        data['Brand'] = brand
+                        break
+            
+            # Extract size from title if applicable
+            if data['Title'] != 'N/A':
+                import re
+                size_patterns = [
+                    r'\b(XS|S|M|L|XL|XXL|3XL|4XL)\b',
+                    r'\b(\d{1,2})\s*(?:inch|in|"|)\b',
+                    r'\b(\d{1,3})\s*(?:cm|mm)\b',
+                    r'\bSize\s*(\d+[A-Z]?)\b',
+                    r'\b(\d{1,2})\s*[Ww]omen?\b',
+                    r'\b(\d{1,2})\s*[Mm]en?\b'
+                ]
+                
+                for pattern in size_patterns:
+                    match = re.search(pattern, data['Title'], re.IGNORECASE)
+                    if match:
+                        data['Size'] = match.group(1)
+                        break
+        
+        except Exception as e:
+            print(f"Error extracting eBay RSS item data: {e}")
+        
+        return data
+    
+    def get_ebay_sample_data(self):
+        """Fallback sample data for eBay"""
+        return [
+            {
+                "Title": "Apple MacBook Pro 13-inch M2 2022",
+                "Price": "$1,299.00",
+                "Brand": "Apple",
+                "Size": "13-inch",
+                "Image": "https://i.ebayimg.com/images/g/xxx/s-l500.jpg",
+                "Link": "https://www.ebay.com/itm/xxx",
+                "Condition": "Excellent",
+                "Seller": "trusted_seller"
+            },
+            {
+                "Title": "Samsung Galaxy S23 Ultra 256GB",
+                "Price": "$899.00",
+                "Brand": "Samsung",
+                "Size": "6.8-inch",
+                "Image": "https://i.ebayimg.com/images/g/yyy/s-l500.jpg",
+                "Link": "https://www.ebay.com/itm/yyy",
+                "Condition": "Like New",
+                "Seller": "phone_deals"
+            },
+            {
+                "Title": "Sony PlayStation 5 Console",
+                "Price": "$499.99",
+                "Brand": "Sony",
+                "Size": "N/A",
+                "Image": "https://i.ebayimg.com/images/g/zzz/s-l500.jpg",
+                "Link": "https://www.ebay.com/itm/zzz",
+                "Condition": "New",
+                "Seller": "gaming_store"
+            },
+            {
+                "Title": "Nike Air Jordan 1 Retro High",
+                "Price": "$250.00",
+                "Brand": "Nike",
+                "Size": "10",
+                "Image": "https://i.ebayimg.com/images/g/aaa/s-l500.jpg",
+                "Link": "https://www.ebay.com/itm/aaa",
+                "Condition": "New",
+                "Seller": "sneaker_king"
+            },
+            {
+                "Title": "Canon EOS R5 Mirrorless Camera",
+                "Price": "$3,899.00",
+                "Brand": "Canon",
+                "Size": "Full Frame",
+                "Image": "https://i.ebayimg.com/images/g/bbb/s-l500.jpg",
+                "Link": "https://www.ebay.com/itm/bbb",
+                "Condition": "Excellent",
+                "Seller": "camera_pro"
+            }
+        ]
     
     def get_sample_data(self):
         """Fallback sample data"""
