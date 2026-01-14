@@ -130,7 +130,7 @@ class handler(BaseHTTPRequestHandler):
             country = query_params.get('country', ['uk'])[0]
             
             try:
-                data = self.scrape_ebay_data(search_text, page_number, items_per_page, min_price, max_price, country)
+                data = self.scrape_ebay_data_robust(search_text, page_number, items_per_page, min_price, max_price, country)
                 self.send_json_response(data['products'], data['pagination'])
             except Exception as e:
                 sample_data = self.get_ebay_sample_data()
@@ -494,6 +494,399 @@ class handler(BaseHTTPRequestHandler):
         
         return data
     
+    def scrape_ebay_data_robust(self, search_text, page_number=1, items_per_page=50, min_price=None, max_price=None, country='uk'):
+        """Robust eBay scraping with dual approach: API first, public scraping fallback"""
+        # Create cache key
+        cache_key = f"ebay_robust_{search_text}_{page_number}_{items_per_page}_{min_price}_{max_price}_{country}"
+        
+        # Check cache first
+        cached_result = cache_manager.get(cache_key)
+        if cached_result:
+            print(f"Returning cached robust result for {search_text}")
+            return cached_result
+        
+        print(f"Robust eBay scraping: {search_text}, page {page_number}, country {country}")
+        
+        # Method 1: Try eBay API if credentials are available and valid
+        api_result = None
+        try:
+            app_id = os.environ.get('EBAY_APP_ID')
+            cert_id = os.environ.get('EBAY_CERT_ID')
+            
+            # Validate credentials
+            if (app_id and cert_id and 
+                app_id != 'YOUR_APP_ID' and cert_id != 'YOUR_CERT_ID' and
+                len(app_id) > 10 and len(cert_id) > 10):
+                
+                print("✅ Valid eBay credentials found - attempting API...")
+                api_result = self.scrape_ebay_api(search_text, page_number, items_per_page, min_price, max_price, country)
+                
+                # Validate API result quality
+                if api_result and api_result.get('data'):
+                    first_item = api_result['data'][0]
+                    title_quality = len(first_item.get('Title', '')) > 10
+                    price_quality = first_item.get('Price', 'N/A') != 'N/A'
+                    
+                    if title_quality and price_quality:
+                        print("✅ eBay API successful with high-quality data")
+                        cache_manager.set(cache_key, api_result)
+                        return api_result
+                    else:
+                        print("⚠️ eBay API returned low-quality data - trying public scraping")
+                else:
+                    print("⚠️ eBay API returned no data - trying public scraping")
+            else:
+                print("⚠️ No valid eBay credentials - using public scraping")
+        except Exception as e:
+            print(f"❌ eBay API failed: {e} - falling back to public scraping")
+        
+        # Method 2: Enhanced public scraping
+        try:
+            print("🔄 Attempting enhanced eBay public scraping...")
+            public_result = self.scrape_ebay_public_api_enhanced(search_text, page_number, items_per_page, min_price, max_price, country)
+            
+            if public_result and public_result.get('data'):
+                print("✅ Enhanced eBay public scraping successful")
+                cache_manager.set(cache_key, public_result)
+                return public_result
+            else:
+                print("⚠️ Enhanced public scraping returned no data")
+        except Exception as e:
+            print(f"❌ Enhanced public scraping failed: {e}")
+        
+        # Method 3: Basic public scraping fallback
+        try:
+            print("🔄 Attempting basic eBay public scraping...")
+            basic_result = self.scrape_ebay_public_api(search_text, page_number, items_per_page, min_price, max_price, country)
+            
+            if basic_result and basic_result.get('data'):
+                print("✅ Basic eBay public scraping successful")
+                cache_manager.set(cache_key, basic_result)
+                return basic_result
+            else:
+                print("⚠️ Basic public scraping returned no data")
+        except Exception as e:
+            print(f"❌ Basic public scraping failed: {e}")
+        
+        # Method 4: Last resort - return sample data
+        print("❌ All eBay methods failed - returning sample data")
+        sample_data = self.get_ebay_sample_data()
+        pagination = {
+            'current_page': page_number,
+            'total_pages': 1,
+            'has_more': False,
+            'items_per_page': len(sample_data),
+            'total_items': len(sample_data),
+            'start_index': (page_number - 1) * items_per_page,
+            'end_index': min(page_number * items_per_page, len(sample_data))
+        }
+        
+        result = {
+            'products': sample_data,
+            'pagination': pagination
+        }
+        
+        return result
+    
+    def scrape_ebay_public_api_enhanced(self, search_text, page_number=1, items_per_page=50, min_price=None, max_price=None, country='uk'):
+        """Enhanced eBay public API scraping with better selectors and anti-bot handling"""
+        import random
+        import time
+        
+        # Map country to eBay domain
+        country_domains = {
+            'uk': 'ebay.co.uk',
+            'us': 'ebay.com',
+            'de': 'ebay.de',
+            'fr': 'ebay.fr',
+            'it': 'ebay.it',
+            'es': 'ebay.es',
+            'ca': 'ebay.ca',
+            'au': 'ebay.com.au'
+        }
+        
+        domain = country_domains.get(country.lower(), 'ebay.com')
+        formatted_search = search_text.replace(' ', '+')
+        
+        # Enhanced headers to look more like a real browser
+        user_agents = [
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0'
+        ]
+        
+        headers = {
+            'User-Agent': random.choice(user_agents),
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Language': 'en-GB,en;q=0.9,en-US;q=0.8',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'DNT': '1',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Cache-Control': 'max-age=0'
+        }
+        
+        # Build URL with parameters
+        url = f"https://{domain}/sch/i.html?_nkw={formatted_search}&_pgn={page_number}&_ipg={items_per_page}"
+        
+        # Add price filters
+        if min_price is not None:
+            url += f"&_udlo={min_price}"
+        if max_price is not None:
+            url += f"&_udhi={max_price}"
+        
+        # Add random delay to avoid rate limiting
+        time.sleep(random.uniform(1, 3))
+        
+        try:
+            response = requests.get(url, headers=headers, timeout=15)
+            response.raise_for_status()
+            
+            soup = BeautifulSoup(response.content, 'html.parser')
+            
+            # Enhanced item selectors
+            item_selectors = [
+                'div.s-item__wrapper',
+                'li.s-item',
+                'div.s-item',
+                '.s-item'
+            ]
+            
+            all_items = []
+            for selector in item_selectors:
+                items = soup.select(selector)
+                if items:
+                    print(f"Found {len(items)} items with selector: {selector}")
+                    all_items = items
+                    break
+            
+            if not all_items:
+                print("No items found with any selector")
+                # Return empty result
+                pagination = {
+                    'current_page': page_number,
+                    'total_pages': 1,
+                    'has_more': False,
+                    'items_per_page': 0,
+                    'total_items': 0
+                }
+                return {'products': [], 'pagination': pagination}
+            
+            # Extract data from items
+            page_data = []
+            for item in all_items[:items_per_page]:
+                try:
+                    item_data = self.extract_ebay_item_data_enhanced(item)
+                    if item_data['Title'] != 'N/A':
+                        # Convert price to EUR
+                        if item_data['Price'] != 'N/A':
+                            item_data['Price'] = self.convert_to_eur(item_data['Price'])
+                        page_data.append(item_data)
+                except Exception as e:
+                    print(f"Error extracting item data: {e}")
+                    continue
+            
+            # Calculate pagination
+            total_items = len(page_data) * 100  # Estimate
+            total_pages = (total_items + items_per_page - 1) // items_per_page
+            has_more = page_number < total_pages
+            
+            pagination = {
+                'current_page': page_number,
+                'total_pages': total_pages,
+                'has_more': has_more,
+                'items_per_page': len(page_data),
+                'total_items': total_items,
+                'start_index': (page_number - 1) * items_per_page,
+                'end_index': min(page_number * items_per_page, total_items)
+            }
+            
+            return {
+                'products': page_data,
+                'pagination': pagination
+            }
+            
+        except Exception as e:
+            print(f"Enhanced public API error: {e}")
+            raise e
+    
+    def extract_ebay_item_data_enhanced(self, item):
+        """Enhanced eBay item data extraction with comprehensive selectors"""
+        data = {
+            'Title': 'N/A',
+            'Price': 'N/A',
+            'Brand': 'N/A',
+            'Size': 'N/A',
+            'Image': 'N/A',
+            'Link': 'N/A',
+            'Condition': 'N/A',
+            'Seller': 'N/A'
+        }
+        
+        try:
+            # Enhanced title selectors
+            title_selectors = [
+                'h3.s-item__title',
+                '.s-item__title',
+                'h3[itemprop="name"]',
+                '.s-item__title--tag',
+                '.s-item__title a',
+                'a.s-item__link span[role="heading"]',
+                '.s-item__title span',
+                'div.s-item__title'
+            ]
+            
+            for selector in title_selectors:
+                title_elem = item.select_one(selector)
+                if title_elem:
+                    title_text = title_elem.get_text(strip=True)
+                    if title_text and title_text != 'New Listing' and len(title_text) > 5:
+                        data['Title'] = title_text
+                        break
+            
+            # Enhanced price selectors
+            price_selectors = [
+                'span.s-item__price',
+                '.s-item__price',
+                'span[itemprop="price"]',
+                '.s-item__detail--primary',
+                '.s-item__price span',
+                '.s-price--current',
+                '.u-flx-cond-w1 .s-item__price',
+                '.s-item__details .s-item__price'
+            ]
+            
+            for selector in price_selectors:
+                price_elem = item.select_one(selector)
+                if price_elem:
+                    price_text = price_elem.get_text(strip=True)
+                    if price_text and any(c.isdigit() for c in price_text):
+                        # Clean price text
+                        price_str = price_text.replace('$', '').replace('£', '').replace('€', '').replace(',', '')
+                        price_str = price_str.replace(' to ', ' ').replace(' - ', ' ').split()[0]
+                        
+                        try:
+                            price_val = float(price_str)
+                            data['Price'] = f"${price_val:.2f}"  # Keep as USD for now
+                            break
+                        except ValueError:
+                            continue
+            
+            # Enhanced image selectors
+            image_selectors = [
+                'img.s-item__image-img',
+                '.s-item__image-img',
+                'img[itemprop="image"]',
+                '.s-item__image img',
+                '.carousel__image img',
+                '.s-item__image-wrapper img'
+            ]
+            
+            for selector in image_selectors:
+                img_elem = item.select_one(selector)
+                if img_elem:
+                    src = img_elem.get('src', '') or img_elem.get('data-src', '')
+                    if src and ('i.ebayimg.com' in src or 'ebayimg.com' in src):
+                        data['Image'] = src
+                        break
+            
+            # Enhanced link selectors
+            link_selectors = [
+                'a.s-item__link',
+                '.s-item__link',
+                'a[itemprop="url"]',
+                '.s-item__image-wrapper a',
+                '.s-item__wrapper a'
+            ]
+            
+            for selector in link_selectors:
+                link_elem = item.select_one(selector)
+                if link_elem:
+                    href = link_elem.get('href', '')
+                    if href and any(domain in href for domain in ['ebay.com', 'ebay.co.uk', 'ebay.de']):
+                        data['Link'] = href
+                        break
+            
+            # Enhanced condition selectors
+            condition_selectors = [
+                '.s-item__condition',
+                'span.s-item__condition',
+                '.s-item__subtitle',
+                'span[itemprop="itemCondition"]',
+                '.SECONDARY_INFO',
+                '.s-item__item-details'
+            ]
+            
+            for selector in condition_selectors:
+                condition_elem = item.select_one(selector)
+                if condition_elem:
+                    condition_text = condition_elem.get_text(strip=True)
+                    if condition_text and len(condition_text) > 2:
+                        data['Condition'] = condition_text
+                        break
+            
+            # Extract brand from title
+            if data['Title'] != 'N/A':
+                known_brands = [
+                    'Apple', 'Samsung', 'Sony', 'LG', 'Microsoft', 'Dell', 'HP', 'Lenovo', 'Asus', 'Acer',
+                    'Nike', 'Adidas', 'Puma', 'Reebok', 'Under Armour', 'New Balance', 'Converse', 'Vans',
+                    'Canon', 'Nikon', 'Fujifilm', 'Panasonic', 'Olympus', 'GoPro', 'DJI',
+                    'Toyota', 'Honda', 'Ford', 'BMW', 'Mercedes', 'Audi', 'Tesla', 'Hyundai', 'Kia',
+                    'Louis Vuitton', 'Gucci', 'Prada', 'Chanel', 'Hermes', 'Rolex', 'Omega', 'Cartier',
+                    'Levi\'s', 'Gap', 'H&M', 'Zara', 'Uniqlo', 'Calvin Klein', 'Tommy Hilfiger',
+                    'Ralph Lauren', 'Tommy Hilfiger', 'Calvin Klein', 'Abercrombie', 'Hollister'
+                ]
+                
+                title_lower = data['Title'].lower()
+                for brand in known_brands:
+                    if brand.lower() in title_lower:
+                        data['Brand'] = brand
+                        break
+            
+            # Extract size from title
+            if data['Title'] != 'N/A':
+                import re
+                size_patterns = [
+                    r'\b(XXS|XS|S|M|L|XL|XXL|XXXL)\b',
+                    r'\b(\d+\.?\d*)\s*(cm|mm|inch|\")\b',
+                    r'\bSize\s*[:\-]\s*([^\s,]+)',
+                    r'\b(\d+)\s*(US|UK|EU)\s*\d+\b'
+                ]
+                
+                for pattern in size_patterns:
+                    match = re.search(pattern, data['Title'], re.IGNORECASE)
+                    if match:
+                        data['Size'] = match.group(1)
+                        break
+            
+        except Exception as e:
+            print(f"Error extracting enhanced eBay item data: {e}")
+        
+        return data
+    
+    def convert_to_eur(self, price_str):
+        """Convert price string to EUR"""
+        try:
+            # Remove currency symbols and extract number
+            import re
+            price_match = re.search(r'(\d+\.?\d*)', price_str.replace(',', ''))
+            if price_match:
+                price_val = float(price_match.group(1))
+                
+                # Convert based on original currency
+                if '$' in price_str:
+                    price_val = price_val * 0.85  # USD to EUR
+                elif '£' in price_str:
+                    price_val = price_val * 1.15  # GBP to EUR
+                
+                return f'€{price_val:.2f}'
+            return price_str
+        except Exception:
+            return price_str
+    
     def scrape_ebay_data(self, search_text, page_number=1, items_per_page=50, min_price=None, max_price=None, country='uk'):
         """Scrape data from eBay using eBay Browse API with rate limiting and caching"""
         # Create cache key
@@ -541,6 +934,8 @@ class handler(BaseHTTPRequestHandler):
             if app_id == 'YOUR_APP_ID' or cert_id == 'YOUR_CERT_ID':
                 print("Using placeholder credentials - falling back to public API")
                 return self.scrape_ebay_public_api(search_text, page_number, items_per_page, min_price, max_price, country)
+            
+            print(f"Attempting eBay API with APP_ID: {app_id[:10]}...")
             
             # Check if using sandbox vs production credentials
             if 'SBX' in app_id:
@@ -997,6 +1392,9 @@ class handler(BaseHTTPRequestHandler):
     
     def extract_ebay_api_item(self, item):
         """Extract data from eBay API response item"""
+        # Debug: Print the item structure to understand what we're getting
+        print(f"DEBUG: eBay API item keys: {list(item.keys())}")
+        
         data = {
             'Title': 'N/A',
             'Price': 'N/A',
@@ -1016,20 +1414,37 @@ class handler(BaseHTTPRequestHandler):
             # Extract price
             if 'price' in item:
                 price = item['price']
-                if 'value' in price:
+                print(f"DEBUG: Price structure: {price}")
+                if isinstance(price, dict) and 'value' in price:
                     data['Price'] = f"€{price['value']:.2f}"
+                elif isinstance(price, (str, float, int)):
+                    data['Price'] = f"€{float(price):.2f}"
             
             # Extract image
             if 'image' in item:
-                data['Image'] = item['image']['imageUrl']
+                if isinstance(item['image'], dict) and 'imageUrl' in item['image']:
+                    data['Image'] = item['image']['imageUrl']
+                elif isinstance(item['image'], str):
+                    data['Image'] = item['image']
             
             # Extract link
             if 'itemWebUrl' in item:
                 data['Link'] = item['itemWebUrl']
+            elif 'viewItemURL' in item:
+                data['Link'] = item['viewItemURL']
             
             # Extract condition
             if 'condition' in item:
                 data['Condition'] = item['condition']
+            elif 'conditionId' in item:
+                data['Condition'] = item['conditionId']
+            
+            # Extract seller
+            if 'seller' in item:
+                if isinstance(item['seller'], dict) and 'username' in item['seller']:
+                    data['Seller'] = item['seller']['username']
+                else:
+                    data['Seller'] = str(item['seller'])
             
             # Extract brand from title
             if data['Title'] != 'N/A':
@@ -1072,6 +1487,9 @@ class handler(BaseHTTPRequestHandler):
     
     def extract_ebay_item_data(self, item):
         """Extract real data from eBay item"""
+        # Debug: Print item HTML structure to understand what we're working with
+        print(f"DEBUG: eBay item HTML classes: {[cls for cls in item.get('class', [])]}")
+        
         data = {
             'Title': 'N/A',
             'Price': 'N/A',
@@ -1089,7 +1507,9 @@ class handler(BaseHTTPRequestHandler):
                 'h3.s-item__title',
                 '.s-item__title',
                 'h3[itemprop="name"]',
-                '.s-item__title--tag'
+                '.s-item__title--tag',
+                '.s-item__title a',
+                'a.s-item__link span[role="heading"]'
             ]
             
             for selector in title_selectors:
@@ -1105,16 +1525,19 @@ class handler(BaseHTTPRequestHandler):
                 'span.s-item__price',
                 '.s-item__price',
                 'span[itemprop="price"]',
-                '.s-item__detail--primary'
+                '.s-item__detail--primary',
+                '.s-item__price span',
+                '.s-price--current'
             ]
             
             for selector in price_selectors:
                 price_elem = item.select_one(selector)
                 if price_elem:
                     price_text = price_elem.get_text(strip=True)
-                    if price_text and ('$' in price_text or '£' in price_text or '€' in price_text):
+                    print(f"DEBUG: Found price text: {price_text}")
+                    if price_text and ('$' in price_text or '£' in price_text or '€' in price_text or any(c.isdigit() for c in price_text)):
                         # Convert to EUR
-                        price_str = price_text.replace('$', '').replace('£', '').replace('€', '').replace(',', '')
+                        price_str = price_text.replace('$', '').replace('£', '').replace('€', '').replace(',', '').replace(' to ', '').replace(' - ', ' ').split()[0]
                         try:
                             price_val = float(price_str)
                             # Convert to EUR
@@ -1128,38 +1551,40 @@ class handler(BaseHTTPRequestHandler):
                         except ValueError:
                             data['Price'] = f'€{price_str}'  # Fallback
             
+            # Extract image - try multiple selectors
+            image_selectors = [
+                'img.s-item__image-img',
+                '.s-item__image-img',
+                'img[itemprop="image"]',
+                '.s-item__image img',
+                '.carousel__image img'
+            ]
+            
+            for selector in image_selectors:
+                img_elem = item.select_one(selector)
+                if img_elem:
+                    src = img_elem.get('src', '')
+                    if src and ('i.ebayimg.com' in src or 'ebayimg.com' in src):
+                        data['Image'] = src
+                        break
+            
             # Extract link - try multiple selectors
             link_selectors = [
                 'a.s-item__link',
                 '.s-item__link',
-                'a[itemprop="url"]'
+                'a[itemprop="url"]',
+                '.s-item__image-wrapper a'
             ]
             
             for selector in link_selectors:
                 link_elem = item.select_one(selector)
                 if link_elem:
                     href = link_elem.get('href', '')
-                    if href and 'ebay.com' in href:
+                    if href and ('ebay.com' in href or 'ebay.co.uk' in href or 'ebay.de' in href):
                         data['Link'] = href
                         break
             
-            # Extract image - try multiple selectors
-            img_selectors = [
-                'img.s-item__image-img',
-                '.s-item__image-img',
-                'img[itemprop="image"]',
-                '.s-item__image--fallback'
-            ]
-            
-            for selector in img_selectors:
-                img_elem = item.select_one(selector)
-                if img_elem:
-                    src = img_elem.get('src', '') or img_elem.get('data-src', '') or img_elem.get('data-original', '')
-                    if src and 'ebayimg.com' in src:
-                        data['Image'] = src
-                        break
-            
-            # Extract condition - try multiple selectors
+            # Extract condition
             condition_selectors = [
                 'span.SECONDARY_INFO',
                 '.s-item__subtitle',
