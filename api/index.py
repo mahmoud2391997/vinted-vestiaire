@@ -504,7 +504,7 @@ class handler(BaseHTTPRequestHandler):
         import re
         import time
         
-        # Map country to eBay domain and currency
+        # Map country to eBay domain and currency - Enhanced with more countries
         country_domains = {
             'uk': 'ebay.co.uk',
             'us': 'ebay.com',
@@ -513,7 +513,28 @@ class handler(BaseHTTPRequestHandler):
             'it': 'ebay.it',
             'es': 'ebay.es',
             'ca': 'ebay.ca',
-            'au': 'ebay.com.au'
+            'au': 'ebay.com.au',
+            'nl': 'ebay.nl',
+            'be': 'ebay.be',
+            'at': 'ebay.at',
+            'ch': 'ebay.ch',
+            'pl': 'ebay.pl',
+            'ie': 'ebay.ie',
+            'hk': 'ebay.com.hk',
+            'my': 'ebay.com.my',
+            'ph': 'ebay.ph',
+            'sg': 'ebay.sg',
+            'tw': 'ebay.com.tw',
+            'in': 'ebay.in',
+            'mx': 'ebay.com.mx',
+            'ar': 'ebay.com.ar',
+            'br': 'ebay.com.br',
+            'cl': 'ebay.cl',
+            'co': 'ebay.com.co',
+            'cr': 'ebay.co.cr',
+            'pa': 'ebay.com.pa',
+            'pe': 'ebay.com.pe',
+            've': 'ebay.com.ve'
         }
         
         country_currencies = {
@@ -524,11 +545,40 @@ class handler(BaseHTTPRequestHandler):
             'it': '€',
             'es': '€',
             'ca': 'C$',
-            'au': 'A$'
+            'au': 'A$',
+            'nl': '€',
+            'be': '€',
+            'at': '€',
+            'ch': 'CHF',
+            'pl': 'zł',
+            'ie': '€',
+            'hk': 'HK$',
+            'my': 'RM',
+            'ph': '₱',
+            'sg': 'S$',
+            'tw': 'NT$',
+            'in': '₹',
+            'mx': 'MX$',
+            'ar': 'AR$',
+            'br': 'R$',
+            'cl': 'CL$',
+            'co': 'COL$',
+            'cr': '₡',
+            'pa': 'B/',
+            'pe': 'S/',
+            've': 'Bs'
         }
         
         domain = country_domains.get(country.lower(), 'ebay.com')
         currency_symbol = country_currencies.get(country.lower(), '$')
+        
+        # Validate country parameter
+        if country.lower() not in country_domains:
+            print(f"⚠️ Warning: Country '{country}' not supported. Defaulting to US (ebay.com)")
+            print(f"Supported countries: {', '.join(sorted(country_domains.keys()))}")
+            country = 'us'
+            domain = country_domains[country]
+            currency_symbol = country_currencies[country]
         
         # Format search query for eBay
         formatted_search = search_text.replace(' ', '+')
@@ -1256,15 +1306,48 @@ class handler(BaseHTTPRequestHandler):
         import time
         import random
         
-        # Map country to eBay domain
+        # Map country to eBay domain - Enhanced with more countries
         country_domains = {
             'uk': 'ebay.co.uk',
             'us': 'ebay.com',
-            'de': 'ebay.de'
+            'de': 'ebay.de',
+            'fr': 'ebay.fr',
+            'it': 'ebay.it',
+            'es': 'ebay.es',
+            'ca': 'ebay.ca',
+            'au': 'ebay.com.au',
+            'nl': 'ebay.nl',
+            'be': 'ebay.be',
+            'at': 'ebay.at',
+            'ch': 'ebay.ch',
+            'pl': 'ebay.pl',
+            'ie': 'ebay.ie',
+            'hk': 'ebay.com.hk',
+            'my': 'ebay.com.my',
+            'ph': 'ebay.ph',
+            'sg': 'ebay.sg',
+            'tw': 'ebay.com.tw',
+            'in': 'ebay.in',
+            'mx': 'ebay.com.mx',
+            'ar': 'ebay.com.ar',
+            'br': 'ebay.com.br',
+            'cl': 'ebay.cl',
+            'co': 'ebay.com.co',
+            'cr': 'ebay.co.cr',
+            'pa': 'ebay.com.pa',
+            'pe': 'ebay.com.pe',
+            've': 'ebay.com.ve'
         }
         
         domain = country_domains.get(country.lower(), 'ebay.com')
         formatted_search = search_text.replace(' ', '+')
+        
+        # Validate country parameter
+        if country.lower() not in country_domains:
+            print(f"⚠️ Warning: Country '{country}' not supported. Defaulting to US (ebay.com)")
+            print(f"Supported countries: {', '.join(sorted(country_domains.keys()))}")
+            country = 'us'
+            domain = country_domains[country]
         
         # Enhanced headers to look like real browser
         headers = {
@@ -1534,7 +1617,7 @@ class handler(BaseHTTPRequestHandler):
         import random
         import time
         
-        # Map country to eBay domain
+        # Map country to eBay domain - Enhanced with more countries
         country_domains = {
             'uk': 'ebay.co.uk',
             'us': 'ebay.com',
@@ -1543,11 +1626,39 @@ class handler(BaseHTTPRequestHandler):
             'it': 'ebay.it',
             'es': 'ebay.es',
             'ca': 'ebay.ca',
-            'au': 'ebay.com.au'
+            'au': 'ebay.com.au',
+            'nl': 'ebay.nl',
+            'be': 'ebay.be',
+            'at': 'ebay.at',
+            'ch': 'ebay.ch',
+            'pl': 'ebay.pl',
+            'ie': 'ebay.ie',
+            'hk': 'ebay.com.hk',
+            'my': 'ebay.com.my',
+            'ph': 'ebay.ph',
+            'sg': 'ebay.sg',
+            'tw': 'ebay.com.tw',
+            'in': 'ebay.in',
+            'mx': 'ebay.com.mx',
+            'ar': 'ebay.com.ar',
+            'br': 'ebay.com.br',
+            'cl': 'ebay.cl',
+            'co': 'ebay.com.co',
+            'cr': 'ebay.co.cr',
+            'pa': 'ebay.com.pa',
+            'pe': 'ebay.com.pe',
+            've': 'ebay.com.ve'
         }
         
         domain = country_domains.get(country.lower(), 'ebay.com')
         formatted_search = search_text.replace(' ', '+')
+        
+        # Validate country parameter
+        if country.lower() not in country_domains:
+            print(f"⚠️ Warning: Country '{country}' not supported. Defaulting to US (ebay.com)")
+            print(f"Supported countries: {', '.join(sorted(country_domains.keys()))}")
+            country = 'us'
+            domain = country_domains[country]
         
         # Enhanced headers to look more like a real browser
         user_agents = [
@@ -1883,22 +1994,37 @@ class handler(BaseHTTPRequestHandler):
                 # Sandbox environment
                 base_url = "https://api.sandbox.ebay.com/buy/browse/v1/item_summary/search"
                 token_url = "https://api.sandbox.ebay.com/identity/v1/oauth2/token"
-                # Map country to marketplace ID
+                # Map country to marketplace ID - Enhanced with more countries
                 country_marketplaces = {
                     'uk': 'EBAY_GB',
                     'us': 'EBAY_US',
                     'de': 'EBAY_DE',
-                    'ca': 'EBAY_CA',
-                    'au': 'EBAY_AU',
                     'fr': 'EBAY_FR',
                     'it': 'EBAY_IT',
                     'es': 'EBAY_ES',
+                    'ca': 'EBAY_CA',
+                    'au': 'EBAY_AU',
                     'nl': 'EBAY_NL',
                     'be': 'EBAY_BE',
                     'at': 'EBAY_AT',
                     'ch': 'EBAY_CH',
                     'pl': 'EBAY_PL',
-                    'ie': 'EBAY_IE'
+                    'ie': 'EBAY_IE',
+                    'hk': 'EBAY_HK',
+                    'my': 'EBAY_MY',
+                    'ph': 'EBAY_PH',
+                    'sg': 'EBAY_SG',
+                    'tw': 'EBAY_TW',
+                    'in': 'EBAY_IN',
+                    'mx': 'EBAY_MX',
+                    'ar': 'EBAY_AR',
+                    'br': 'EBAY_BR',
+                    'cl': 'EBAY_CL',
+                    'co': 'EBAY_CO',
+                    'cr': 'EBAY_CR',
+                    'pa': 'EBAY_PA',
+                    'pe': 'EBAY_PE',
+                    've': 'EBAY_VE'
                 }
                 marketplace_id = country_marketplaces.get(country.lower(), 'EBAY_GB')
                 print(f"Using eBay SANDBOX environment for {country.upper()}")
@@ -1906,22 +2032,37 @@ class handler(BaseHTTPRequestHandler):
                 # Production environment
                 base_url = "https://api.ebay.com/buy/browse/v1/item_summary/search"
                 token_url = "https://api.ebay.com/identity/v1/oauth2/token"
-                # Map country to marketplace ID
+                # Map country to marketplace ID - Enhanced with more countries
                 country_marketplaces = {
                     'uk': 'EBAY_GB',
                     'us': 'EBAY_US',
                     'de': 'EBAY_DE',
-                    'ca': 'EBAY_CA',
-                    'au': 'EBAY_AU',
                     'fr': 'EBAY_FR',
                     'it': 'EBAY_IT',
                     'es': 'EBAY_ES',
+                    'ca': 'EBAY_CA',
+                    'au': 'EBAY_AU',
                     'nl': 'EBAY_NL',
                     'be': 'EBAY_BE',
                     'at': 'EBAY_AT',
                     'ch': 'EBAY_CH',
                     'pl': 'EBAY_PL',
-                    'ie': 'EBAY_IE'
+                    'ie': 'EBAY_IE',
+                    'hk': 'EBAY_HK',
+                    'my': 'EBAY_MY',
+                    'ph': 'EBAY_PH',
+                    'sg': 'EBAY_SG',
+                    'tw': 'EBAY_TW',
+                    'in': 'EBAY_IN',
+                    'mx': 'EBAY_MX',
+                    'ar': 'EBAY_AR',
+                    'br': 'EBAY_BR',
+                    'cl': 'EBAY_CL',
+                    'co': 'EBAY_CO',
+                    'cr': 'EBAY_CR',
+                    'pa': 'EBAY_PA',
+                    'pe': 'EBAY_PE',
+                    've': 'EBAY_VE'
                 }
                 marketplace_id = country_marketplaces.get(country.lower(), 'EBAY_GB')
                 print(f"Using eBay PRODUCTION environment for {country.upper()}")
