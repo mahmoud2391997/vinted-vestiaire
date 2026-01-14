@@ -470,23 +470,32 @@ class handler(BaseHTTPRequestHandler):
             }
         
         try:
-            app_id = os.environ.get('EBAY_APP_ID', '-au-PRD-c47e7b8cc-74398d07')  # Set your eBay App ID
-            cert_id = os.environ.get('EBAY_CERT_ID', 'PRD-47e7b8cc3c35-9de7-466d-b49f-c75b')  #
+            app_id = os.environ.get('EBAY_APP_ID')
+            cert_id = os.environ.get('EBAY_CERT_ID')
             
-            # For demo purposes, if no API keys are provided, use a public API endpoint
-            if app_id == 'YOUR_APP_ID':
-                # Use a public eBay-compatible API or fallback to enhanced scrapinga
+            # Validate credentials are provided
+            if not app_id or not cert_id:
+                print("Missing eBay credentials - falling back to public API")
                 return self.scrape_ebay_public_api(search_text, page_number, items_per_page, min_price, max_price)
             
-            # Check if using sandbox credentials
+            # For demo purposes, if placeholder keys are used, fall back to public API
+            if app_id == 'YOUR_APP_ID' or cert_id == 'YOUR_CERT_ID':
+                print("Using placeholder credentials - falling back to public API")
+                return self.scrape_ebay_public_api(search_text, page_number, items_per_page, min_price, max_price)
+            
+            # Check if using sandbox vs production credentials
             if 'SBX' in app_id:
-                # Use sandbox environment
+                # Sandbox environment
                 base_url = "https://api.sandbox.ebay.com/buy/browse/v1/item_summary/search"
                 token_url = "https://api.sandbox.ebay.com/identity/v1/oauth2/token"
                 marketplace_id = "EBAY_US"
+                print("Using eBay SANDBOX environment")
             else:
-                # Use production environment
+                # Production environment
                 base_url = "https://api.ebay.com/buy/browse/v1/item_summary/search"
+                token_url = "https://api.ebay.com/identity/v1/oauth2/token"
+                marketplace_id = "EBAY_US"
+                print("Using eBay PRODUCTION environment")
                 token_url = "https://api.ebay.com/identity/v1/oauth2/token"
                 marketplace_id = "EBAY_US"
             
