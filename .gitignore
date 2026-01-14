@@ -1,8 +1,5 @@
 # Environment variables
-.env
-.env.local
-.env.production
-.env.development
+
 
 # Python cache
 __pycache__/
@@ -28,9 +25,7 @@ wheels/
 MANIFEST
 
 # Virtual environments
-venv/
-env/
-ENV/
+
 
 # IDE
 .vscode/
@@ -73,9 +68,6 @@ coverage.xml
 # pyenv
 .python-version
 
-# Environments
-.env
-.venv
 
 # mypy
 .mypy_cache/
