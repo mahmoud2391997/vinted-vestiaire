@@ -40,6 +40,8 @@ GET https://vinted-scraping.vercel.app/ebay
 
 ## 🔧 Query Parameters
 
+
+
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | `search` | string | No | "t-shirt" | Search query term |
