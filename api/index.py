@@ -200,7 +200,7 @@ class handler(BaseHTTPRequestHandler):
                 # Format search query
                 formatted_search = search_text.replace(' ', '%20')
                 
-                # Map country to Vinted domain
+                # Map country to Vinted domain and currency
                 country_domains = {
                     'uk': 'vinted.co.uk',
                     'pl': 'vinted.pl',
@@ -228,7 +228,35 @@ class handler(BaseHTTPRequestHandler):
                     'ie': 'vinted.ie'
                 }
                 
+                country_currencies = {
+                    'uk': '£',
+                    'pl': 'zł',
+                    'de': '€',
+                    'fr': '€',
+                    'it': '€',
+                    'es': '€',
+                    'nl': '€',
+                    'be': '€',
+                    'at': '€',
+                    'cz': 'Kč',
+                    'sk': '€',
+                    'hu': 'Ft',
+                    'ro': 'lei',
+                    'bg': 'лв',
+                    'hr': 'kn',
+                    'si': '€',
+                    'lt': '€',
+                    'lv': '€',
+                    'ee': '€',
+                    'pt': '€',
+                    'se': 'kr',
+                    'dk': 'kr',
+                    'fi': '€',
+                    'ie': '€'
+                }
+                
                 domain = country_domains.get(country.lower(), 'vinted.co.uk')
+                currency_symbol = country_currencies.get(country.lower(), '£')
                 url = f"https://www.{domain}/catalog?search_text={formatted_search}&page={page}"
                 
                 # Make request
@@ -256,7 +284,7 @@ class handler(BaseHTTPRequestHandler):
                             
                             if item_container:
                                 link = item.get('href', '')
-                                data_dict = self.extract_item_data(item_container)
+                                data_dict = self.extract_item_data(item_container, currency_symbol)
                                 data_dict['Link'] = link
                                 
                                 if data_dict['Title'] != 'N/A' or data_dict['Brand'] != 'N/A':
@@ -279,9 +307,10 @@ class handler(BaseHTTPRequestHandler):
         if min_price is not None or max_price is not None:
             filtered_data = []
             for item in all_data:
-                price_str = item.get('Price', '0zł')
+                price_str = item.get('Price', f'0{currency_symbol}')
                 # Extract numeric value from price string
                 import re
+                # Remove all currency symbols and extract number
                 price_match = re.search(r'(\d+[.,]?\d*)', price_str.replace(' ', ''))
                 if price_match:
                     price_value = float(price_match.group(1).replace(',', '.'))
@@ -363,7 +392,7 @@ class handler(BaseHTTPRequestHandler):
             print(f"Error checking pagination: {e}")
             return {'total_pages': 1, 'has_more': False}
     
-    def extract_item_data(self, item_container):
+    def extract_item_data(self, item_container, currency_symbol='£'):
         """Extract data from the item container's text content"""
         import re
         text = item_container.get_text()
@@ -399,21 +428,19 @@ class handler(BaseHTTPRequestHandler):
         
         # Extract price (improved patterns for better accuracy)
         price_patterns = [
-            r'(\d+,\d+)\s*zł',           # Standard format: 150,00zł
-            r'(\d+\.\d+)\s*zł',           # Alternative format: 150.00zł
-            r'(\d+)\s*zł',                # Whole numbers: 150zł
-            r'(\d+,\d+)',                 # Just numbers with comma: 150,00
-            r'(\d+\.\d+)'                 # Just numbers with dot: 150.00
+            rf'(\d+[.,]?\d*)\s*{re.escape(currency_symbol)}',           # Standard format: 150£
+            rf'(\d+[.,]?\d*)\s*zł',           # Fallback for zł
+            rf'(\d+[.,]?\d*)\s*€',           # Fallback for €
+            rf'(\d+[.,]?\d*)\s*\$',         # Fallback for $
+            rf'(\d+[.,]?\d*)',                # Just numbers
         ]
         
         for pattern in price_patterns:
             price_match = re.search(pattern, clean_text)
             if price_match:
                 price = price_match.group(1)
-                # Ensure proper formatting with zł
-                if not price.endswith('zł'):
-                    price = price + 'zł'
-                data['Price'] = price
+                # Always format with the correct currency symbol for the country
+                data['Price'] = f"{price}{currency_symbol}"
                 break
         
         # Extract brand - look for known brand patterns or from alt text
@@ -579,6 +606,8 @@ class handler(BaseHTTPRequestHandler):
                 # eBay-specific headers
                 'X-EBAY-C-MARKETPLACE-ID': marketplace_id,
                 'Accept-Language': 'en-GB' if country.lower() == 'uk' else 'en-US',
+                # Force EUR currency for all markets
+                'X-EBAY-C-PRICE-CURRENCY': 'EUR',
                 
                 # Performance optimizations
                 'Accept-Encoding': 'gzip',
@@ -591,7 +620,7 @@ class handler(BaseHTTPRequestHandler):
             params = {
                 'q': search_text,
                 'limit': min(items_per_page, 50),
-                'offset': (page_number - 1) * items_per_page
+                'offset': (page_number - 1) * min(items_per_page, 50)
             }
             
             # Add price filters if specified (eBay API format)
@@ -616,9 +645,26 @@ class handler(BaseHTTPRequestHandler):
                     try:
                         item_data = self.extract_ebay_api_item(item)
                         if item_data['Title'] != 'N/A':
+                            # Convert price to EUR if not already
+                            if item_data['Price'] != 'N/A':
+                                # Remove any currency symbol and convert to EUR format
+                                price_str = item_data['Price'].replace('$', '').replace('£', '').replace('€', '').replace(',', '')
+                                try:
+                                    price_val = float(price_str)
+                                    # For now, use direct conversion (in production, you'd use real exchange rates)
+                                    # Assuming 1 USD = 0.85 EUR, 1 GBP = 1.15 EUR as examples
+                                    if '$' in item_data['Price']:
+                                        price_val = price_val * 0.85  # USD to EUR
+                                    elif '£' in item_data['Price']:
+                                        price_val = price_val * 1.15  # GBP to EUR
+                                    
+                                    item_data['Price'] = f'€{price_val:.2f}'
+                                except ValueError:
+                                    item_data['Price'] = f'€{price_str}'  # Fallback
+                            
                             # Apply client-side price filtering as fallback
                             if min_price is not None or max_price is not None:
-                                price_str = item_data.get('Price', '0').replace('$', '').replace(',', '')
+                                price_str = item_data.get('Price', '€0').replace('€', '').replace(',', '')
                                 try:
                                     price_val = float(price_str)
                                     
@@ -640,18 +686,19 @@ class handler(BaseHTTPRequestHandler):
                         continue
                 
                 # Calculate pagination
+                actual_limit = min(items_per_page, 50)
                 total_items = data.get('total', len(page_data))
-                total_pages = (total_items + items_per_page - 1) // items_per_page
+                total_pages = (total_items + actual_limit - 1) // actual_limit
                 has_more = page_number < total_pages
                 
                 pagination = {
                     'current_page': page_number,
                     'total_pages': total_pages,
                     'has_more': has_more,
-                    'items_per_page': items_per_page,
+                    'items_per_page': actual_limit,
                     'total_items': total_items,
-                    'start_index': (page_number - 1) * items_per_page,
-                    'end_index': min(page_number * items_per_page, total_items)
+                    'start_index': (page_number - 1) * actual_limit,
+                    'end_index': min(page_number * actual_limit, total_items)
                 }
                 
                 result = {
@@ -970,7 +1017,7 @@ class handler(BaseHTTPRequestHandler):
             if 'price' in item:
                 price = item['price']
                 if 'value' in price:
-                    data['Price'] = f"${price['value']}"
+                    data['Price'] = f"€{price['value']:.2f}"
             
             # Extract image
             if 'image' in item:
@@ -1065,9 +1112,21 @@ class handler(BaseHTTPRequestHandler):
                 price_elem = item.select_one(selector)
                 if price_elem:
                     price_text = price_elem.get_text(strip=True)
-                    if price_text and '$' in price_text:
-                        data['Price'] = price_text
-                        break
+                    if price_text and ('$' in price_text or '£' in price_text or '€' in price_text):
+                        # Convert to EUR
+                        price_str = price_text.replace('$', '').replace('£', '').replace('€', '').replace(',', '')
+                        try:
+                            price_val = float(price_str)
+                            # Convert to EUR
+                            if '$' in price_text:
+                                price_val = price_val * 0.85  # USD to EUR
+                            elif '£' in price_text:
+                                price_val = price_val * 1.15  # GBP to EUR
+                            
+                            data['Price'] = f'€{price_val:.2f}'
+                            break
+                        except ValueError:
+                            data['Price'] = f'€{price_str}'  # Fallback
             
             # Extract link - try multiple selectors
             link_selectors = [
@@ -1209,7 +1268,14 @@ class handler(BaseHTTPRequestHandler):
                 import re
                 price_match = re.search(r'\$(\d+(?:,\d{3})*(?:\.\d{2})?)', desc_text)
                 if price_match:
-                    data['Price'] = f"${price_match.group(1)}"
+                    price_str = price_match.group(1).replace(',', '')
+                    try:
+                        price_val = float(price_str)
+                        # Convert USD to EUR
+                        price_val = price_val * 0.85
+                        data['Price'] = f'€{price_val:.2f}'
+                    except ValueError:
+                        data['Price'] = f'€{price_str}'  # Fallback
                 
                 # Extract condition
                 condition_match = re.search(r'Condition:\s*([^<]+)', desc_text)
