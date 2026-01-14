@@ -1067,12 +1067,23 @@ class handler(BaseHTTPRequestHandler):
                     # Extract price from description
                     desc_elem = item.find('description')
                     price = 'N/A'
+                    image = 'N/A'
                     if desc_elem:
                         desc_text = desc_elem.text
                         price_match = re.search(r'\$?(\d+(?:,\d{3})*(?:\.\d{2})?)', desc_text)
                         if price_match:
                             price_val = float(price_match.group(1).replace(',', ''))
                             price = f"${price_val:.2f}"
+                        
+                        # Extract image from description
+                        img_match = re.search(r'<img[^>]+src=["\']([^"\'>]+)["\']', desc_text)
+                        if img_match:
+                            image = img_match.group(1)
+                        else:
+                            # Try to find eBay image URLs in description
+                            ebay_img_match = re.search(r'(https://i\.ebayimg\.com/[^\s\"\'>]+)', desc_text)
+                            if ebay_img_match:
+                                image = ebay_img_match.group(1)
                     
                     link_elem = item.find('link')
                     link = link_elem.text if link_elem else 'N/A'
@@ -1082,7 +1093,7 @@ class handler(BaseHTTPRequestHandler):
                         'Price': price,
                         'Brand': self.extract_brand_from_title(title),
                         'Size': 'N/A',
-                        'Image': 'N/A',
+                        'Image': image,
                         'Link': link,
                         'Condition': 'N/A',
                         'Seller': 'N/A'
@@ -1140,19 +1151,25 @@ class handler(BaseHTTPRequestHandler):
             # Extract links
             links = re.findall(r'href["\'\s]*=["\'\s]*([^"\'\s>]+ebay[^"\'\s>]*)', html_content, re.IGNORECASE)
             
-            print(f"Found {len(titles)} titles, {len(prices)} prices, {len(links)} links")
+            # Extract images
+            images = re.findall(r'<img[^>]+src=["\']([^"\'>]+)["\']', html_content, re.IGNORECASE)
+            # Filter for eBay images
+            ebay_images = [img for img in images if 'ebayimg.com' in img or 'i.ebay' in img]
+            
+            print(f"Found {len(titles)} titles, {len(prices)} prices, {len(links)} links, {len(ebay_images)} images")
             
             # Create items from extracted data
             page_data = []
             num_items = min(len(titles), len(prices), len(links), items_per_page)
             
             for i in range(num_items):
+                image_url = ebay_images[i] if i < len(ebay_images) else 'N/A'
                 page_data.append({
                     'Title': titles[i].strip() if i < len(titles) else 'N/A',
                     'Price': f"${prices[i]}" if i < len(prices) else 'N/A',
                     'Brand': self.extract_brand_from_title(titles[i]) if i < len(titles) else 'N/A',
                     'Size': 'N/A',
-                    'Image': 'N/A',
+                    'Image': image_url,
                     'Link': links[i].strip() if i < len(links) else 'N/A',
                     'Condition': 'N/A',
                     'Seller': 'N/A'
