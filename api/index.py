@@ -530,17 +530,13 @@ class handler(BaseHTTPRequestHandler):
                 'offset': (page_number - 1) * items_per_page
             }
             
-            # Add price filters if specified
-            filters = []
+            # Add price filters if specified (eBay API format)
             if min_price is not None and max_price is not None:
-                filters.append(f'price:[{min_price}..{max_price}]')
+                params['filter'] = f'price:[{min_price}..{max_price}]'
             elif min_price is not None:
-                filters.append(f'price:[{min_price}..]')
+                params['filter'] = f'price:[{min_price}..]'
             elif max_price is not None:
-                filters.append(f'price:[..{max_price}]')
-            
-            if filters:
-                params['filter'] = ','.join(filters)
+                params['filter'] = f'price:[..{max_price}]'
             
             # Make API request with retry
             response = self.make_api_request_with_retry(base_url, headers, params)
@@ -556,7 +552,26 @@ class handler(BaseHTTPRequestHandler):
                     try:
                         item_data = self.extract_ebay_api_item(item)
                         if item_data['Title'] != 'N/A':
-                            page_data.append(item_data)
+                            # Apply client-side price filtering as fallback
+                            if min_price is not None or max_price is not None:
+                                price_str = item_data.get('Price', '0').replace('$', '').replace(',', '')
+                                try:
+                                    price_val = float(price_str)
+                                    
+                                    # Apply filters
+                                    include_item = True
+                                    if min_price is not None:
+                                        include_item = include_item and price_val >= float(min_price)
+                                    if max_price is not None:
+                                        include_item = include_item and price_val <= float(max_price)
+                                    
+                                    if include_item:
+                                        page_data.append(item_data)
+                                except ValueError:
+                                    # If price can't be parsed, include it
+                                    page_data.append(item_data)
+                            else:
+                                page_data.append(item_data)
                     except Exception as e:
                         continue
                 
