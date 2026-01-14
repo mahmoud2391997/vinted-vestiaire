@@ -470,13 +470,12 @@ class handler(BaseHTTPRequestHandler):
             }
         
         try:
-            # eBay API configuration
-            app_id = os.environ.get('EBAY_APP_ID', 'mahmoude-au-SBX-3b451c5e7-ded9f7d8')  # Set your eBay App ID
-            cert_id = os.environ.get('EBAY_CERT_ID', 'SBX-b451c5e7289f-258d-4b8a-a65e-d1cf')  # Set your eBay Cert ID
+            app_id = os.environ.get('EBAY_APP_ID', '-au-PRD-c47e7b8cc-74398d07')  # Set your eBay App ID
+            cert_id = os.environ.get('EBAY_CERT_ID', 'PRD-47e7b8cc3c35-9de7-466d-b49f-c75b')  #
             
             # For demo purposes, if no API keys are provided, use a public API endpoint
             if app_id == 'YOUR_APP_ID':
-                # Use a public eBay-compatible API or fallback to enhanced scraping
+                # Use a public eBay-compatible API or fallback to enhanced scrapinga
                 return self.scrape_ebay_public_api(search_text, page_number, items_per_page, min_price, max_price)
             
             # Check if using sandbox credentials
