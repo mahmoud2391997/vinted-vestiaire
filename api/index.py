@@ -505,13 +505,23 @@ class handler(BaseHTTPRequestHandler):
             if not access_token:
                 raise Exception("Failed to get eBay API access token")
             
-            # Construct API request
+            # Construct enhanced API request with proper eBay headers
             headers = {
+                # Required headers
                 'Authorization': f'Bearer {access_token}',
                 'Content-Type': 'application/json',
+                'Accept': 'application/json',
+                
+                # eBay-specific headers
                 'X-EBAY-C-MARKETPLACE-ID': marketplace_id,
                 'Accept-Language': 'en-US',
-                'User-Agent': 'eBay-API-Client/1.0'
+                
+                # Performance optimizations
+                'Accept-Encoding': 'gzip',
+                'Connection': 'keep-alive',
+                
+                # Enhanced user agent
+                'User-Agent': 'eBay-API-Client/2.0'
             }
             
             params = {
@@ -575,7 +585,7 @@ class handler(BaseHTTPRequestHandler):
                 
                 return result
             elif response and response.status_code == 429:
-                # Rate limited by eBay API
+                # Enhanced rate limit handling
                 retry_after = int(response.headers.get('Retry-After', 60))
                 print(f"eBay API rate limited. Retry after {retry_after} seconds")
                 
@@ -591,13 +601,28 @@ class handler(BaseHTTPRequestHandler):
                 return {
                     'products': [],
                     'pagination': pagination,
-                    'error': f'API rate limit exceeded. Retry after {retry_after} seconds.'
+                    'error': f'API rate limit exceeded. Retry after {retry_after} seconds.',
+                    'error_code': 'RATE_LIMIT',
+                    'retry_after': retry_after,
+                    'http_status': 429
                 }
             else:
+                # Enhanced error handling for other HTTP errors
                 error_msg = f"eBay API error: {response.status_code}"
-                if response:
-                    error_msg += f" - {response.text}"
-                print(error_msg)
+                error_details = None
+                
+                try:
+                    error_data = response.json()
+                    error_msg = error_data.get('message', error_msg)
+                    error_code = error_data.get('errorId', f'HTTP_{response.status_code}')
+                    error_details = error_data
+                    print(f"Structured error: {error_code} - {error_msg}")
+                except:
+                    error_msg = error_msg
+                    error_code = f'HTTP_{response.status_code}'
+                    error_details = {'raw_response': response.text[:200]}
+                
+                print(f"API Error: {error_msg}")
                 raise Exception(error_msg)
                 
         except Exception as e:
@@ -653,9 +678,12 @@ class handler(BaseHTTPRequestHandler):
                 credentials = f"{app_id}:{cert_id}"
                 encoded_credentials = base64.b64encode(credentials.encode()).decode()
                 
+                # Enhanced OAuth headers per eBay documentation
                 headers = {
                     'Authorization': f'Basic {encoded_credentials}',
-                    'Content-Type': 'application/x-www-form-urlencoded'
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'Accept': 'application/json',
+                    'Accept-Charset': 'utf-8'
                 }
                 
                 data = {
