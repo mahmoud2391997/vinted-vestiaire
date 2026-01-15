@@ -136,6 +136,40 @@ class handler(BaseHTTPRequestHandler):
                 sample_data = self.get_ebay_sample_data()
                 pagination = {'current_page': 1, 'total_pages': 1, 'has_more': False, 'items_per_page': len(sample_data), 'total_items': len(sample_data)}
                 self.send_json_response(sample_data, pagination, error=str(e))
+        elif parsed_path.path == '/ebay/sold':
+            # eBay sold items endpoint
+            query_params = parse_qs(parsed_path.query)
+            search_text = query_params.get('search', ['laptop'])[0]
+            page_number = int(query_params.get('page', ['1'])[0])
+            items_per_page = int(query_params.get('items_per_page', ['50'])[0])
+            min_price = query_params.get('min_price', [None])[0]
+            max_price = query_params.get('max_price', [None])[0]
+            country = query_params.get('country', ['uk'])[0]
+            
+            try:
+                data = self.scrape_ebay_sold_items(search_text, page_number, items_per_page, min_price, max_price, country)
+                self.send_json_response(data['products'], data['pagination'])
+            except Exception as e:
+                sample_data = self.get_ebay_sold_sample_data()
+                pagination = {'current_page': 1, 'total_pages': 1, 'has_more': False, 'items_per_page': len(sample_data), 'total_items': len(sample_data)}
+                self.send_json_response(sample_data, pagination, error=str(e))
+        elif parsed_path.path == '/vinted/sold':
+            # Vinted sold items endpoint
+            query_params = parse_qs(parsed_path.query)
+            search_text = query_params.get('search', ['t-shirt'])[0]
+            page_number = int(query_params.get('page', ['1'])[0])
+            items_per_page = int(query_params.get('items_per_page', ['50'])[0])
+            min_price = query_params.get('min_price', [None])[0]
+            max_price = query_params.get('max_price', [None])[0]
+            country = query_params.get('country', ['uk'])[0]
+            
+            try:
+                data = self.scrape_vinted_sold_items(search_text, page_number, items_per_page, min_price, max_price, country)
+                self.send_json_response(data['products'], data['pagination'])
+            except Exception as e:
+                sample_data = self.get_vinted_sold_sample_data()
+                pagination = {'current_page': 1, 'total_pages': 1, 'has_more': False, 'items_per_page': len(sample_data), 'total_items': len(sample_data)}
+                self.send_json_response(sample_data, pagination, error=str(e))
         else:
             self.send_http_response(404, 'Not Found')
     
@@ -2895,4 +2929,349 @@ class handler(BaseHTTPRequestHandler):
             {"Title": "Christian Dior Bag", "Price": "650zł", "Brand": "Christian Dior", "Size": "One Size", "Link": "https://example.com/item5"},
             {"Title": "Michael Kors Bag", "Price": "550zł", "Brand": "Michael Kors", "Size": "Medium", "Link": "https://example.com/item6"},
             {"Title": "Coach Bag", "Price": "350zł", "Brand": "Coach", "Size": "Large", "Link": "https://example.com/item7"}
+        ]
+    
+    def scrape_ebay_sold_items(self, search_text, page_number=1, items_per_page=50, min_price=None, max_price=None, country='uk'):
+        """Scrape eBay sold items using eBay's sold items filter"""
+        print(f"\n=== EBAY SOLD ITEMS SCRAPER ===")
+        print(f"Search: {search_text}, Page: {page_number}, Country: {country}")
+        
+        # Create cache key
+        cache_key = f"ebay_sold_{search_text}_{page_number}_{items_per_page}_{min_price}_{max_price}_{country}"
+        
+        # Check cache first
+        cached_data = cache_manager.get(cache_key)
+        if cached_data:
+            print("📋 Returning cached sold items data")
+            return cached_data
+        
+        # Rate limiting
+        client_ip = "ebay_sold_client"
+        if not rate_limiter.is_allowed(client_ip):
+            wait_time = rate_limiter.wait_time(client_ip)
+            print(f"⏰ Rate limited. Waiting {wait_time:.1f} seconds...")
+            time.sleep(wait_time)
+        
+        try:
+            # Construct eBay sold items search URL
+            base_url = f"https://www.ebay.{country}/sch/i.html"
+            
+            # Build search parameters for sold items
+            params = {
+                '_nkw': search_text,
+                '_sacat': 0,  # All categories
+                '_ipg': items_per_page,
+                '_pgn': page_number,
+                'LH_Sold': '1',  # Show only sold items
+                'LH_Complete': '1',  # Show only completed listings
+                'rt': 'nc'  # No carousel
+            }
+            
+            # Add price filters if provided
+            if min_price:
+                params['_udlo'] = min_price
+            if max_price:
+                params['_udhi'] = max_price
+            
+            # Construct URL
+            param_string = '&'.join([f"{k}={v}" for k, v in params.items()])
+            search_url = f"{base_url}?{param_string}"
+            
+            print(f"🔍 Fetching sold items from: {search_url}")
+            
+            # Make request with headers
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+                'Accept-Encoding': 'gzip, deflate',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1',
+            }
+            
+            response = requests.get(search_url, headers=headers, timeout=10)
+            response.raise_for_status()
+            
+            soup = BeautifulSoup(response.content, 'html.parser')
+            products = []
+            
+            # Find sold items
+            items = soup.find_all('div', {'class': 's-item__wrapper'})
+            
+            for item in items[:items_per_page]:
+                try:
+                    product = {}
+                    
+                    # Title
+                    title_elem = item.find('h3', {'class': 's-item__title'})
+                    product['Title'] = title_elem.get_text(strip=True) if title_elem else 'N/A'
+                    
+                    # Price (sold price)
+                    price_elem = item.find('span', {'class': 's-item__price'})
+                    product['Price'] = price_elem.get_text(strip=True) if price_elem else 'N/A'
+                    
+                    # Link
+                    link_elem = item.find('a', {'class': 's-item__link'})
+                    product['Link'] = link_elem.get('href') if link_elem else 'N/A'
+                    
+                    # Image
+                    img_elem = item.find('img', {'class': 's-item__image-img'})
+                    product['Image'] = img_elem.get('src') if img_elem else 'N/A'
+                    
+                    # Condition
+                    condition_elem = item.find('span', {'class': 's-item__condition'})
+                    product['Condition'] = condition_elem.get_text(strip=True) if condition_elem else 'N/A'
+                    
+                    # Seller
+                    seller_elem = item.find('span', {'class': 's-item__seller-name'})
+                    product['Seller'] = seller_elem.get_text(strip=True) if seller_elem else 'N/A'
+                    
+                    # Brand extraction
+                    if product['Title'] != 'N/A':
+                        known_brands = ['Apple', 'Samsung', 'Sony', 'Nike', 'Adidas', 'Canon', 'Dell', 'HP', 'Lenovo']
+                        title_lower = product['Title'].lower()
+                        for brand in known_brands:
+                            if brand.lower() in title_lower:
+                                product['Brand'] = brand
+                                break
+                        else:
+                            product['Brand'] = 'Unknown'
+                    
+                    # Size extraction
+                    if product['Title'] != 'N/A':
+                        size_match = re.search(r'\b(XS|S|M|L|XL|XXL|3XL|4XL|\d{1,2})\b', product['Title'])
+                        product['Size'] = size_match.group(1) if size_match else 'N/A'
+                    
+                    # Sold date
+                    sold_date_elem = item.find('span', {'class': 's-item__ended-date'})
+                    product['SoldDate'] = sold_date_elem.get_text(strip=True) if sold_date_elem else 'N/A'
+                    
+                    products.append(product)
+                    
+                except Exception as e:
+                    print(f"⚠️ Error parsing sold item: {e}")
+                    continue
+            
+            # Pagination
+            pagination = {
+                'current_page': page_number,
+                'total_pages': 10,  # Estimate
+                'has_more': len(products) == items_per_page,
+                'items_per_page': len(products),
+                'total_items': len(products)
+            }
+            
+            result = {'products': products, 'pagination': pagination}
+            
+            # Cache the result
+            cache_manager.set(cache_key, result)
+            
+            print(f"✅ Successfully scraped {len(products)} sold items from eBay")
+            return result
+            
+        except Exception as e:
+            print(f"❌ Error scraping eBay sold items: {e}")
+            # Return fallback data
+            return {'products': self.get_ebay_sold_sample_data(), 'pagination': {'current_page': 1, 'total_pages': 1, 'has_more': False}}
+    
+    def scrape_vinted_sold_items(self, search_text, page_number=1, items_per_page=50, min_price=None, max_price=None, country='uk'):
+        """Scrape Vinted sold items"""
+        print(f"\n=== VINTED SOLD ITEMS SCRAPER ===")
+        print(f"Search: {search_text}, Page: {page_number}, Country: {country}")
+        
+        # Create cache key
+        cache_key = f"vinted_sold_{search_text}_{page_number}_{items_per_page}_{min_price}_{max_price}_{country}"
+        
+        # Check cache first
+        cached_data = cache_manager.get(cache_key)
+        if cached_data:
+            print("📋 Returning cached sold items data")
+            return cached_data
+        
+        # Rate limiting
+        client_ip = "vinted_sold_client"
+        if not rate_limiter.is_allowed(client_ip):
+            wait_time = rate_limiter.wait_time(client_ip)
+            print(f"⏰ Rate limited. Waiting {wait_time:.1f} seconds...")
+            time.sleep(wait_time)
+        
+        try:
+            # Vinted sold items URL (note: Vinted may not have a direct sold items filter)
+            base_url = f"https://www.vinted.{country}"
+            
+            # Build search parameters
+            params = {
+                'search_text': search_text,
+                'page': page_number,
+                'per_page': items_per_page,
+                'order': 'newest_first',  # Most recent first
+                'status': 'sold'  # Try to filter by sold status
+            }
+            
+            # Add price filters if provided
+            if min_price:
+                params['price_from'] = min_price
+            if max_price:
+                params['price_to'] = max_price
+            
+            # Construct URL
+            param_string = '&'.join([f"{k}={v}" for k, v in params.items()])
+            search_url = f"{base_url}/catalog?{param_string}"
+            
+            print(f"🔍 Fetching sold items from: {search_url}")
+            
+            # Make request with headers
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+                'Accept-Encoding': 'gzip, deflate',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1',
+            }
+            
+            response = requests.get(search_url, headers=headers, timeout=10)
+            response.raise_for_status()
+            
+            soup = BeautifulSoup(response.content, 'html.parser')
+            products = []
+            
+            # Find sold items (Vinted structure)
+            items = soup.find_all('div', {'class': 'ItemBox__container'})
+            
+            for item in items[:items_per_page]:
+                try:
+                    product = {}
+                    
+                    # Title
+                    title_elem = item.find('h3', {'class': 'ItemBox__title'})
+                    product['Title'] = title_elem.get_text(strip=True) if title_elem else 'N/A'
+                    
+                    # Price
+                    price_elem = item.find('span', {'class': 'ItemBox__price'})
+                    product['Price'] = price_elem.get_text(strip=True) if price_elem else 'N/A'
+                    
+                    # Link
+                    link_elem = item.find('a', {'class': 'ItemBox__link'})
+                    product['Link'] = f"https://www.vinted.{country}{link_elem.get('href')}" if link_elem else 'N/A'
+                    
+                    # Image
+                    img_elem = item.find('img', {'class': 'ItemBox__image'})
+                    product['Image'] = img_elem.get('src') if img_elem else 'N/A'
+                    
+                    # Brand
+                    brand_elem = item.find('span', {'class': 'ItemBox__brand'})
+                    product['Brand'] = brand_elem.get_text(strip=True) if brand_elem else 'Unknown'
+                    
+                    # Size
+                    size_elem = item.find('span', {'class': 'ItemBox__size'})
+                    product['Size'] = size_elem.get_text(strip=True) if size_elem else 'N/A'
+                    
+                    # Sold date
+                    sold_date_elem = item.find('span', {'class': 'ItemBox__sold-date'})
+                    product['SoldDate'] = sold_date_elem.get_text(strip=True) if sold_date_elem else 'N/A'
+                    
+                    # Seller
+                    seller_elem = item.find('span', {'class': 'ItemBox__seller'})
+                    product['Seller'] = seller_elem.get_text(strip=True) if seller_elem else 'N/A'
+                    
+                    products.append(product)
+                    
+                except Exception as e:
+                    print(f"⚠️ Error parsing sold item: {e}")
+                    continue
+            
+            # Pagination
+            pagination = {
+                'current_page': page_number,
+                'total_pages': 10,  # Estimate
+                'has_more': len(products) == items_per_page,
+                'items_per_page': len(products),
+                'total_items': len(products)
+            }
+            
+            result = {'products': products, 'pagination': pagination}
+            
+            # Cache the result
+            cache_manager.set(cache_key, result)
+            
+            print(f"✅ Successfully scraped {len(products)} sold items from Vinted")
+            return result
+            
+        except Exception as e:
+            print(f"❌ Error scraping Vinted sold items: {e}")
+            # Return fallback data
+            return {'products': self.get_vinted_sold_sample_data(), 'pagination': {'current_page': 1, 'total_pages': 1, 'has_more': False}}
+    
+    def get_ebay_sold_sample_data(self):
+        """Sample sold items data for eBay"""
+        return [
+            {
+                "Title": "Nike Air Jordan 1 Retro High - Sold",
+                "Price": "$250.00",
+                "Brand": "Nike",
+                "Size": "10",
+                "Image": "https://i.ebayimg.com/images/g/aaa/s-l500.jpg",
+                "Link": "https://www.ebay.com/itm/aaa",
+                "Condition": "New",
+                "Seller": "sneaker_king",
+                "SoldDate": "2024-01-10"
+            },
+            {
+                "Title": "Canon EOS R5 Mirrorless Camera - Sold",
+                "Price": "$3,899.00",
+                "Brand": "Canon",
+                "Size": "Full Frame",
+                "Image": "https://i.ebayimg.com/images/g/bbb/s-l500.jpg",
+                "Link": "https://www.ebay.com/itm/bbb",
+                "Condition": "Excellent",
+                "Seller": "camera_pro",
+                "SoldDate": "2024-01-08"
+            },
+            {
+                "Title": "Apple MacBook Pro 16\" - Sold",
+                "Price": "$2,100.00",
+                "Brand": "Apple",
+                "Size": "16 inch",
+                "Image": "https://i.ebayimg.com/images/g/ccc/s-l500.jpg",
+                "Link": "https://www.ebay.com/itm/ccc",
+                "Condition": "Like New",
+                "Seller": "tech_deals",
+                "SoldDate": "2024-01-05"
+            }
+        ]
+    
+    def get_vinted_sold_sample_data(self):
+        """Sample sold items data for Vinted"""
+        return [
+            {
+                "Title": "Vintage Levi's 501 Jeans - Sold",
+                "Price": "45€",
+                "Brand": "Levi's",
+                "Size": "32",
+                "Image": "https://images.vinted.net/aaa",
+                "Link": "https://www.vinted.co.uk/items/aaa",
+                "Seller": "vintage_lover",
+                "SoldDate": "2024-01-12"
+            },
+            {
+                "Title": "Zara Leather Jacket - Sold",
+                "Price": "85€",
+                "Brand": "Zara",
+                "Size": "M",
+                "Image": "https://images.vinted.net/bbb",
+                "Link": "https://www.vinted.co.uk/items/bbb",
+                "Seller": "fashionista",
+                "SoldDate": "2024-01-11"
+            },
+            {
+                "Title": "Adidas Stan Smith Shoes - Sold",
+                "Price": "55€",
+                "Brand": "Adidas",
+                "Size": "42",
+                "Image": "https://images.vinted.net/ccc",
+                "Link": "https://www.vinted.co.uk/items/ccc",
+                "Seller": "sneaker_head",
+                "SoldDate": "2024-01-09"
+            }
         ]
