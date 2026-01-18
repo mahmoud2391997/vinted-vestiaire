@@ -1467,6 +1467,12 @@ class handler(BaseHTTPRequestHandler):
                     print(f"📦 Extracting item {i+1}...")
                     
                     # Try multiple title selectors
+                    title_selectors = [
+                        'h3.s-item__title',
+                        '.s-item__title',
+                        'h3',
+                        '[class*="title"]',
+                        '.s-title'
                     ]
                     
                     title = None
