@@ -1464,29 +1464,30 @@ class handler(BaseHTTPRequestHandler):
                 # Extract data from first few items
                 page_data = []
                 for i, item in enumerate(items[:items_per_page]):
-                    print(f"📦 Extracting item {i+1}...")
-                    
-                    # Try multiple title selectors
-                    title_selectors = [
-                        'h3.s-item__title',
-                        '.s-item__title',
-                        'h3',
-                        '[class*="title"]',
-                        '.s-title'
-                    ]
-                    
-                    title = None
-                    for selector in title_selectors:
-                        title_elem = item.select_one(selector)
-                        if title_elem:
-                            title = title_elem.get_text(strip=True)
-                            break
-                    
-                    product['Title'] = title if title else 'N/A'
-                    
-                    # Add product to results
-                    if product['Title'] != 'N/A':
-                        products.append(product)
+                    try:
+                        print(f"📦 Extracting item {i+1}...")
+                        
+                        # Try multiple title selectors
+                        title_selectors = [
+                            'h3.s-item__title',
+                            '.s-item__title',
+                            'h3',
+                            '[class*="title"]',
+                            '.s-title'
+                        ]
+                        
+                        title = None
+                        for selector in title_selectors:
+                            title_elem = item.select_one(selector)
+                            if title_elem:
+                                title = title_elem.get_text(strip=True)
+                                break
+                        
+                        product['Title'] = title if title else 'N/A'
+                        
+                        # Add product to results
+                        if product['Title'] != 'N/A':
+                            products.append(product)
                 
                 except Exception as e:
                     print(f"⚠️ Error parsing eBay item: {e}")
