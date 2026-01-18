@@ -170,6 +170,23 @@ class handler(BaseHTTPRequestHandler):
                 sample_data = self.get_vinted_sold_sample_data()
                 pagination = {'current_page': 1, 'total_pages': 1, 'has_more': False, 'items_per_page': len(sample_data), 'total_items': len(sample_data)}
                 self.send_json_response(sample_data, pagination, error=str(e))
+        elif parsed_path.path == '/vestiaire':
+            # Vestiaire Collective scraping endpoint
+            query_params = parse_qs(parsed_path.query)
+            search_text = query_params.get('search', ['handbag'])[0]
+            page_number = int(query_params.get('page', ['1'])[0])
+            items_per_page = int(query_params.get('items_per_page', ['50'])[0])
+            min_price = query_params.get('min_price', [None])[0]
+            max_price = query_params.get('max_price', [None])[0]
+            country = query_params.get('country', ['uk'])[0]
+            
+            try:
+                data = self.scrape_vestiaire_data(search_text, page_number, items_per_page, min_price, max_price, country)
+                self.send_json_response(data['products'], data['pagination'])
+            except Exception as e:
+                sample_data = self.get_vestiaire_sample_data()
+                pagination = {'current_page': 1, 'total_pages': 1, 'has_more': False, 'items_per_page': len(sample_data), 'total_items': len(sample_data)}
+                self.send_json_response(sample_data, pagination, error=str(e))
         else:
             self.send_http_response(404, 'Not Found')
     
@@ -3202,6 +3219,427 @@ class handler(BaseHTTPRequestHandler):
             print(f"❌ Error scraping Vinted sold items: {e}")
             # Return fallback data
             return {'products': self.get_vinted_sold_sample_data(), 'pagination': {'current_page': 1, 'total_pages': 1, 'has_more': False}}
+    
+    def scrape_vestiaire_data(self, search_text, page_number=1, items_per_page=50, min_price=None, max_price=None, country='uk'):
+        """Scrape data from Vestiaire Collective"""
+        print(f"\n=== VESTIAIRE COLLECTIVE SCRAPER ===")
+        print(f"Search: {search_text}, Page: {page_number}, Country: {country}")
+        
+        # Create cache key
+        cache_key = f"vestiaire_{search_text}_{page_number}_{items_per_page}_{min_price}_{max_price}_{country}"
+        
+        # Check cache first
+        cached_data = cache_manager.get(cache_key)
+        if cached_data:
+            print("📋 Returning cached Vestiaire data")
+            return cached_data
+        
+        # Rate limiting
+        client_ip = "vestiaire_client"
+        if not rate_limiter.is_allowed(client_ip):
+            wait_time = rate_limiter.wait_time(client_ip)
+            print(f"⏰ Rate limited. Waiting {wait_time:.1f} seconds...")
+            time.sleep(wait_time)
+        
+        try:
+            # Vestiaire Collective URL structure
+            country_domains = {
+                'uk': 'co.uk',
+                'us': 'com',
+                'fr': 'fr',
+                'de': 'de',
+                'it': 'it',
+                'es': 'es'
+            }
+            
+            domain = country_domains.get(country, 'co.uk')
+            base_url = f"https://www.vestiairecollective.{domain}"
+            
+            # Build search parameters
+            params = {
+                'q': search_text,
+                'page': page_number,
+                'size': items_per_page,
+                'sort': 'relevance'
+            }
+            
+            # Add price filters if provided
+            if min_price or max_price:
+                price_filter = []
+                if min_price:
+                    price_filter.append(f"price|{min_price}")
+                if max_price:
+                    price_filter.append(f"price|{max_price}")
+                if price_filter:
+                    params['filter'] = ','.join(price_filter)
+            
+            # Construct URL
+            param_string = '&'.join([f"{k}={v}" for k, v in params.items()])
+            search_url = f"{base_url}/search?{param_string}"
+            
+            print(f"🔍 Fetching from: {search_url}")
+            
+            # Make request with headers
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.5',
+                'Accept-Encoding': 'gzip, deflate',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1',
+                'Referer': base_url,
+                'DNT': '1',
+                'Sec-Fetch-Dest': 'document',
+                'Sec-Fetch-Mode': 'navigate',
+                'Sec-Fetch-Site': 'same-origin',
+                'Cache-Control': 'max-age=0'
+            }
+            
+            response = requests.get(search_url, headers=headers, timeout=15)
+            response.raise_for_status()
+            
+            soup = BeautifulSoup(response.content, 'html.parser')
+            products = []
+            
+            # Find product items - Vestiaire uses different class names
+            items = soup.find_all('div', {'class': 'product-card'}) or soup.find_all('article', {'class': 'product-card'}) or soup.find_all('div', {'data-testid': 'product-card'})
+            
+            # Fallback selectors if primary ones don't work
+            if not items:
+                items = soup.find_all('div', class_=lambda x: x and 'product' in x.lower() and 'card' in x.lower())
+            
+            if not items:
+                items = soup.find_all('a', class_=lambda x: x and 'product' in x.lower())
+            
+            print(f"Found {len(items)} potential product items")
+            
+            for item in items[:items_per_page]:
+                try:
+                    product = {}
+                    
+                    # Title - multiple possible selectors
+                    title_selectors = [
+                        'h2.product-card__title',
+                        'h3.product-card__title',
+                        '.product-title',
+                        '.product-card-title',
+                        'h2',
+                        'h3',
+                        '[data-testid="product-title"]'
+                    ]
+                    
+                    title = None
+                    for selector in title_selectors:
+                        title_elem = item.select_one(selector)
+                        if title_elem:
+                            title = title_elem.get_text(strip=True)
+                            break
+                    
+                    # Fallback: look for any text that seems like a title
+                    if not title:
+                        text_elements = item.find_all(text=True)
+                        for text in text_elements:
+                            text = text.strip()
+                            if len(text) > 10 and not text.isdigit() and '$' not in text and '€' not in text and '£' not in text:
+                                title = text
+                                break
+                    
+                    product['Title'] = title if title else 'N/A'
+                    
+                    # Price - multiple possible selectors
+                    price_selectors = [
+                        '.product-card__price',
+                        '.product-price',
+                        '.price',
+                        '[data-testid="product-price"]',
+                        '.price-current'
+                    ]
+                    
+                    price = None
+                    for selector in price_selectors:
+                        price_elem = item.select_one(selector)
+                        if price_elem:
+                            price = price_elem.get_text(strip=True)
+                            break
+                    
+                    # Fallback: look for text with currency symbols
+                    if not price:
+                        text_elements = item.find_all(text=True)
+                        for text in text_elements:
+                            text = text.strip()
+                            if any(symbol in text for symbol in ['$', '€', '£']):
+                                price = text
+                                break
+                    
+                    product['Price'] = price if price else 'N/A'
+                    
+                    # Brand - multiple possible selectors
+                    brand_selectors = [
+                        '.product-card__brand',
+                        '.product-brand',
+                        '.brand',
+                        '[data-testid="product-brand"]'
+                    ]
+                    
+                    brand = None
+                    for selector in brand_selectors:
+                        brand_elem = item.select_one(selector)
+                        if brand_elem:
+                            brand = brand_elem.get_text(strip=True)
+                            break
+                    
+                    # Fallback: extract brand from title
+                    if not brand and product['Title'] != 'N/A':
+                        luxury_brands = [
+                            'Chanel', 'Louis Vuitton', 'Hermès', 'Gucci', 'Prada', 'Dior', 'Balenciaga',
+                            'Saint Laurent', 'Celine', 'Bottega Veneta', 'Fendi', 'Valentino', 'Burberry',
+                            'Versace', 'Givenchy', 'Loewe', 'Jacquemus', 'Goyard', 'Cartier', 'Rolex',
+                            'Van Cleef & Arpels', 'Tiffany & Co.', 'Hermès', 'Balmain', 'Alexander McQueen'
+                        ]
+                        
+                        title_lower = product['Title'].lower()
+                        for brand_name in luxury_brands:
+                            if brand_name.lower() in title_lower:
+                                brand = brand_name
+                                break
+                    
+                    product['Brand'] = brand if brand else 'Unknown'
+                    
+                    # Size - multiple possible selectors
+                    size_selectors = [
+                        '.product-card__size',
+                        '.product-size',
+                        '.size',
+                        '[data-testid="product-size"]'
+                    ]
+                    
+                    size = None
+                    for selector in size_selectors:
+                        size_elem = item.select_one(selector)
+                        if size_elem:
+                            size = size_elem.get_text(strip=True)
+                            break
+                    
+                    # Fallback: extract size from title or text
+                    if not size and product['Title'] != 'N/A':
+                        size_match = re.search(r'\b(XS|S|M|L|XL|XXL|3XL|4XL|ONE SIZE|UNIQUE|\d{1,2})\b', product['Title'], re.IGNORECASE)
+                        if size_match:
+                            size = size_match.group(1)
+                    
+                    product['Size'] = size if size else 'N/A'
+                    
+                    # Image - multiple possible selectors
+                    img_selectors = [
+                        'img.product-card__image',
+                        'img.product-image',
+                        '.product-card img',
+                        'img[src*="vestiairecollective"]',
+                        '[data-testid="product-image"]'
+                    ]
+                    
+                    image = None
+                    for selector in img_selectors:
+                        img_elem = item.select_one(selector)
+                        if img_elem:
+                            image = img_elem.get('src') or img_elem.get('data-src')
+                            if image:
+                                break
+                    
+                    product['Image'] = image if image else 'N/A'
+                    
+                    # Link - multiple possible selectors
+                    link_selectors = [
+                        'a.product-card__link',
+                        'a.product-link',
+                        'a[href*="/product/"]',
+                        'a[href*="/p/"]'
+                    ]
+                    
+                    link = None
+                    for selector in link_selectors:
+                        link_elem = item.select_one(selector)
+                        if link_elem:
+                            href = link_elem.get('href')
+                            if href:
+                                if href.startswith('/'):
+                                    link = f"{base_url}{href}"
+                                else:
+                                    link = href
+                                break
+                    
+                    # Fallback: if item itself is a link
+                    if not link and item.name == 'a':
+                        href = item.get('href')
+                        if href:
+                            if href.startswith('/'):
+                                link = f"{base_url}{href}"
+                            else:
+                                link = href
+                    
+                    product['Link'] = link if link else 'N/A'
+                    
+                    # Condition - Vestiaire specific
+                    condition_selectors = [
+                        '.product-card__condition',
+                        '.product-condition',
+                        '.condition',
+                        '[data-testid="product-condition"]'
+                    ]
+                    
+                    condition = None
+                    for selector in condition_selectors:
+                        condition_elem = item.select_one(selector)
+                        if condition_elem:
+                            condition = condition_elem.get_text(strip=True)
+                            break
+                    
+                    product['Condition'] = condition if condition else 'N/A'
+                    
+                    # Seller
+                    seller_selectors = [
+                        '.product-card__seller',
+                        '.product-seller',
+                        '.seller',
+                        '[data-testid="product-seller"]'
+                    ]
+                    
+                    seller = None
+                    for selector in seller_selectors:
+                        seller_elem = item.select_one(selector)
+                        if seller_elem:
+                            seller = seller_elem.get_text(strip=True)
+                            break
+                    
+                    product['Seller'] = seller if seller else 'N/A'
+                    
+                    # Original Price (if available)
+                    original_price_selectors = [
+                        '.product-card__original-price',
+                        '.product-original-price',
+                        '.original-price',
+                        '.price-original'
+                    ]
+                    
+                    original_price = None
+                    for selector in original_price_selectors:
+                        price_elem = item.select_one(selector)
+                        if price_elem:
+                            original_price = price_elem.get_text(strip=True)
+                            break
+                    
+                    product['OriginalPrice'] = original_price if original_price else 'N/A'
+                    
+                    # Discount percentage
+                    discount_selectors = [
+                        '.product-card__discount',
+                        '.product-discount',
+                        '.discount',
+                        '.price-discount'
+                    ]
+                    
+                    discount = None
+                    for selector in discount_selectors:
+                        discount_elem = item.select_one(selector)
+                        if discount_elem:
+                            discount = discount_elem.get_text(strip=True)
+                            break
+                    
+                    product['Discount'] = discount if discount else 'N/A'
+                    
+                    # Only add if we have at least a title and price
+                    if product['Title'] != 'N/A' and product['Price'] != 'N/A':
+                        products.append(product)
+                    
+                except Exception as e:
+                    print(f"⚠️ Error parsing Vestiaire item: {e}")
+                    continue
+            
+            # Pagination
+            pagination = {
+                'current_page': page_number,
+                'total_pages': 10,  # Estimate
+                'has_more': len(products) == items_per_page,
+                'items_per_page': len(products),
+                'total_items': len(products)
+            }
+            
+            result = {'products': products, 'pagination': pagination}
+            
+            # Cache the result
+            cache_manager.set(cache_key, result)
+            
+            print(f"✅ Successfully scraped {len(products)} items from Vestiaire Collective")
+            return result
+            
+        except Exception as e:
+            print(f"❌ Error scraping Vestiaire Collective: {e}")
+            # Return fallback data
+            return {'products': self.get_vestiaire_sample_data(), 'pagination': {'current_page': 1, 'total_pages': 1, 'has_more': False}}
+    
+    def get_vestiaire_sample_data(self):
+        """Sample data for Vestiaire Collective"""
+        return [
+            {
+                "Title": "Chanel Classic Flap Bag - Medium",
+                "Price": "£4,250",
+                "Brand": "Chanel",
+                "Size": "Medium",
+                "Image": "https://images.vestiairecollective.com/produit/123456/abc.jpg",
+                "Link": "https://www.vestiairecollective.co.uk/women/bags/handbags/chanel/classic-flap-bag-123456.shtml",
+                "Condition": "Very Good",
+                "Seller": "luxury_boutique_paris",
+                "OriginalPrice": "£5,500",
+                "Discount": "23%"
+            },
+            {
+                "Title": "Louis Vuitton Neverfull MM",
+                "Price": "£1,180",
+                "Brand": "Louis Vuitton",
+                "Size": "MM",
+                "Image": "https://images.vestiairecollective.com/produit/789012/def.jpg",
+                "Link": "https://www.vestiairecollective.co.uk/women/bags/tote-bags/louis-vuitton/neverfull-mm-789012.shtml",
+                "Condition": "Good",
+                "Seller": "vintage_finds_london",
+                "OriginalPrice": "£1,450",
+                "Discount": "19%"
+            },
+            {
+                "Title": "Hermès Birkin 30 Togo Leather",
+                "Price": "£8,900",
+                "Brand": "Hermès",
+                "Size": "30",
+                "Image": "https://images.vestiairecollective.com/produit/345678/ghi.jpg",
+                "Link": "https://www.vestiairecollective.co.uk/women/bags/handbags/hermes/birkin-30-345678.shtml",
+                "Condition": "Excellent",
+                "Seller": "hermes_specialist_milan",
+                "OriginalPrice": "£10,200",
+                "Discount": "13%"
+            },
+            {
+                "Title": "Gucci Horsebit 1955 Mini Bag",
+                "Price": "£890",
+                "Brand": "Gucci",
+                "Size": "Mini",
+                "Image": "https://images.vestiairecollective.com/produit/456789/jkl.jpg",
+                "Link": "https://www.vestiairecollective.co.uk/women/bags/shoulder-bags/gucci/horsebit-1955-mini-456789.shtml",
+                "Condition": "Very Good",
+                "Seller": "gucci_lover_ny",
+                "OriginalPrice": "£1,100",
+                "Discount": "19%"
+            },
+            {
+                "Title": "Prada Re-Edition 2005 Nylon Bag",
+                "Price": "£650",
+                "Brand": "Prada",
+                "Size": "One Size",
+                "Image": "https://images.vestiairecollective.com/produit/567890/mno.jpg",
+                "Link": "https://www.vestiairecollective.co.uk/women/bags/shoulder-bags/prada/re-edition-2005-nylon-567890.shtml",
+                "Condition": "Good",
+                "Seller": "prada_vintage_paris",
+                "OriginalPrice": "£790",
+                "Discount": "18%"
+            }
+        ]
     
     def get_ebay_sold_sample_data(self):
         """Sample sold items data for eBay"""
