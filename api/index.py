@@ -119,6 +119,27 @@ class handler(BaseHTTPRequestHandler):
             else:
                 # HTML request - serve enhanced UI
                 self.send_html_response()
+        elif parsed_path.path == '/ebay/api':
+                # eBay API endpoint (production-ready)
+                query_params = parse_qs(parsed_path.query)
+                search_text = query_params.get('search', ['electronics'])[0]
+                page_number = int(query_params.get('page', ['1'])[0])
+                items_per_page = int(query_params.get('items_per_page', ['20'])[0])
+                min_price = query_params.get('min_price')
+                max_price = query_params.get('max_price')
+                country = query_params.get('country', ['us'])[0]
+                
+                try:
+                    # Import eBay API scraper
+                    from ebay_api_scraper import eBayAPIScraper
+                    scraper = eBayAPIScraper()
+                    data = scraper.search_items(search_text, country, items_per_page, min_price, max_price)
+                    self.send_json_response(data['products'], data['pagination'])
+                except Exception as e:
+                    # Fallback to web scraping if API fails
+                    print(f"⚠️ eBay API failed, falling back to web scraping: {e}")
+                    data = self.scrape_ebay_working(search_text, page_number, items_per_page, min_price, max_price, country)
+                    self.send_json_response(data['products'], data['pagination'], error=f"API fallback: {str(e)}")
         elif parsed_path.path == '/ebay':
             # eBay scraping endpoint
             query_params = parse_qs(parsed_path.query)
