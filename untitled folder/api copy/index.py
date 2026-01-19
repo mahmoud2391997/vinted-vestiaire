@@ -1490,10 +1490,10 @@ class handler(BaseHTTPRequestHandler):
                         # Add product to results
                         if product['Title'] != 'N/A':
                             products.append(product)
-                    
-                    except Exception as e:
-                        print(f"⚠️ Error parsing eBay item: {e}")
-                        continue
+                
+                except Exception as e:
+                    print(f"⚠️ Error parsing eBay item: {e}")
+                    continue
             
             return products
         except Exception as e:
@@ -1854,25 +1854,3 @@ class eBayScraper:
 
 # Main handler
 handler = MyHandler
-
-# Local server startup
-if __name__ == '__main__':
-    from http.server import HTTPServer
-    import sys
-    
-    port = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
-    server = HTTPServer(('localhost', port), handler)
-    print(f"🚀 Server running on http://localhost:{port}")
-    print("📝 Available endpoints:")
-    print("   / - Vinted scraper (default)")
-    print("   /ebay - eBay scraper")
-    print("   /ebay/sold - eBay sold items")
-    print("   /vinted/sold - Vinted sold items")
-    print("   /vestiaire - Vestiaire Collective scraper")
-    print(f"\n💡 Example: http://localhost:{port}/?search=nike&items_per_page=5")
-    
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        print("\n🛑 Server stopped")
-        server.shutdown()
