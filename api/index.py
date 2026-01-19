@@ -2098,7 +2098,7 @@ class eBayScraper:
         """Scrape data from eBay"""
         return {'products': [], 'pagination': {'current_page': 1, 'total_pages': 1, 'has_more': False}}
 
-# Main handler
+# Main handler  
 handler = MyHandler
 
 # Local server startup
