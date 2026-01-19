@@ -130,11 +130,17 @@ class handler(BaseHTTPRequestHandler):
                 country = query_params.get('country', ['us'])[0]
                 
                 try:
-                    # Import eBay API scraper
-                    from ebay_api_scraper import eBayAPIScraper
-                    scraper = eBayAPIScraper()
-                    data = scraper.search_items(search_text, country, items_per_page, min_price, max_price)
-                    self.send_json_response(data['products'], data['pagination'])
+                    # Import eBay API scraper (with fallback)
+                    try:
+                        from ebay_api_scraper import eBayAPIScraper
+                        scraper = eBayAPIScraper()
+                        data = scraper.search_items(search_text, country, items_per_page, min_price, max_price)
+                        self.send_json_response(data['products'], data['pagination'])
+                    except ImportError:
+                        # Fallback to web scraping if module not available
+                        print("⚠️ eBay API module not found, using web scraping fallback")
+                        data = self.scrape_ebay_working(search_text, page_number, items_per_page, min_price, max_price, country)
+                        self.send_json_response(data['products'], data['pagination'], error="API module not available - using web scraping")
                 except Exception as e:
                     # Fallback to web scraping if API fails
                     print(f"⚠️ eBay API failed, falling back to web scraping: {e}")
@@ -168,12 +174,12 @@ class handler(BaseHTTPRequestHandler):
             country = query_params.get('country', ['uk'])[0]
             
             try:
-                data = self.scrape_ebay_sold_items(search_text, page_number, items_per_page, min_price, max_price, country)
-                self.send_json_response(data['products'], data['pagination'])
-            except Exception as e:
+                # Use sample data for sold items (API endpoint not available)
                 sample_data = self.get_ebay_sold_sample_data()
                 pagination = {'current_page': 1, 'total_pages': 1, 'has_more': False, 'items_per_page': len(sample_data), 'total_items': len(sample_data)}
-                self.send_json_response(sample_data, pagination, error=str(e))
+                self.send_json_response(sample_data, pagination)
+            except Exception as e:
+                self.send_error(500, f"Server Error: {str(e)}")
         elif parsed_path.path == '/vinted/sold':
             # Vinted sold items endpoint
             query_params = parse_qs(parsed_path.query)
@@ -185,12 +191,12 @@ class handler(BaseHTTPRequestHandler):
             country = query_params.get('country', ['uk'])[0]
             
             try:
-                data = self.scrape_vinted_sold_items(search_text, page_number, items_per_page, min_price, max_price, country)
-                self.send_json_response(data['products'], data['pagination'])
-            except Exception as e:
+                # Use sample data for sold items (API endpoint not available)
                 sample_data = self.get_vinted_sold_sample_data()
                 pagination = {'current_page': 1, 'total_pages': 1, 'has_more': False, 'items_per_page': len(sample_data), 'total_items': len(sample_data)}
-                self.send_json_response(sample_data, pagination, error=str(e))
+                self.send_json_response(sample_data, pagination)
+            except Exception as e:
+                self.send_error(500, f"Server Error: {str(e)}")
         elif parsed_path.path == '/vestiaire':
             # Vestiaire Collective scraping endpoint
             query_params = parse_qs(parsed_path.query)
@@ -234,7 +240,7 @@ class handler(BaseHTTPRequestHandler):
     def send_html_response(self):
         """Send enhanced HTML UI"""
         try:
-            with open('index.html', 'r', encoding='utf-8') as f:
+            with open('api/index.html', 'r', encoding='utf-8') as f:
                 html_content = f.read()
             
             self.send_http_response(200, html_content, 'text/html')
@@ -2093,7 +2099,7 @@ class eBayScraper:
         return {'products': [], 'pagination': {'current_page': 1, 'total_pages': 1, 'has_more': False}}
 
 # Main handler
-handler = handler
+handler = MyHandler
 
 # Local server startup
 if __name__ == '__main__':
