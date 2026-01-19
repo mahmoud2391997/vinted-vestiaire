@@ -1644,6 +1644,57 @@ class MyHandler(BaseHTTPRequestHandler):
                     sample_data = self.get_vestiaire_sample_data()
                     pagination = {'current_page': 1, 'total_pages': 1, 'has_more': False, 'items_per_page': len(sample_data), 'total_items': len(sample_data)}
                     self.send_json_response(sample_data, pagination, error=str(e))
+            elif parsed_path.path == '/ebay':
+                # eBay scraping endpoint
+                query_params = parse_qs(parsed_path.query)
+                search_text = query_params.get('search', ['electronics'])[0]
+                page_number = int(query_params.get('page', ['1'])[0])
+                items_per_page = int(query_params.get('items_per_page', ['20'])[0])
+                min_price = query_params.get('min_price')
+                max_price = query_params.get('max_price')
+                country = query_params.get('country', ['uk'])[0]
+                
+                try:
+                    data = self.scrape_ebay_data(search_text, page_number, items_per_page, min_price, max_price, country)
+                    self.send_json_response(data['products'], data['pagination'])
+                except Exception as e:
+                    sample_data = self.get_ebay_sample_data()
+                    pagination = {'current_page': 1, 'total_pages': 1, 'has_more': False, 'items_per_page': len(sample_data), 'total_items': len(sample_data)}
+                    self.send_json_response(sample_data, pagination, error=str(e))
+                    
+            elif parsed_path.path == '/ebay/sold':
+                # eBay sold items endpoint
+                query_params = parse_qs(parsed_path.query)
+                search_text = query_params.get('search', ['electronics'])[0]
+                page_number = int(query_params.get('page', ['1'])[0])
+                items_per_page = int(query_params.get('items_per_page', ['20'])[0])
+                min_price = query_params.get('min_price')
+                max_price = query_params.get('max_price')
+                country = query_params.get('country', ['uk'])[0]
+                
+                try:
+                    sample_data = self.get_ebay_sold_sample_data()
+                    pagination = {'current_page': 1, 'total_pages': 1, 'has_more': False, 'items_per_page': len(sample_data), 'total_items': len(sample_data)}
+                    self.send_json_response(sample_data, pagination)
+                except Exception as e:
+                    self.send_error(500, f"Server Error: {str(e)}")
+                    
+            elif parsed_path.path == '/vinted/sold':
+                # Vinted sold items endpoint
+                query_params = parse_qs(parsed_path.query)
+                search_text = query_params.get('search', ['fashion'])[0]
+                page_number = int(query_params.get('page', ['1'])[0])
+                items_per_page = int(query_params.get('items_per_page', ['20'])[0])
+                min_price = query_params.get('min_price')
+                max_price = query_params.get('max_price')
+                country = query_params.get('country', ['uk'])[0]
+                
+                try:
+                    sample_data = self.get_vinted_sold_sample_data()
+                    pagination = {'current_page': 1, 'total_pages': 1, 'has_more': False, 'items_per_page': len(sample_data), 'total_items': len(sample_data)}
+                    self.send_json_response(sample_data, pagination)
+                except Exception as e:
+                    self.send_error(500, f"Server Error: {str(e)}")
             else:
                 self.send_error(404, "Not Found")
                 
@@ -1657,8 +1708,84 @@ class MyHandler(BaseHTTPRequestHandler):
     
     def scrape_ebay_data(self, search_text, page_number=1, items_per_page=50, min_price=None, max_price=None, country='uk'):
         """Scrape data from eBay"""
-        scraper = eBayScraper()
-        return scraper.scrape_ebay_data(search_text, page_number, items_per_page, min_price, max_price, country)
+        return self.scrape_ebay_working(search_text, page_number, items_per_page, min_price, max_price, country)
+    
+    def get_ebay_sample_data(self):
+        """Generate sample data for eBay"""
+        return [
+            {
+                "Title": "Apple iPhone 13 Pro - 128GB",
+                "Price": "$699.99",
+                "Brand": "Apple",
+                "Size": "128GB",
+                "Image": "https://i.ebayimg.com/images/g/abc/s-l500.jpg",
+                "Link": "https://www.ebay.com/itm/123456",
+                "Condition": "Excellent",
+                "Seller": "tech_seller"
+            },
+            {
+                "Title": "Samsung Galaxy S22 Ultra",
+                "Price": "$549.99",
+                "Brand": "Samsung",
+                "Size": "256GB",
+                "Image": "https://i.ebayimg.com/images/g/def/s-l500.jpg",
+                "Link": "https://www.ebay.com/itm/789012",
+                "Condition": "Like New",
+                "Seller": "phone_deals"
+            }
+        ]
+    
+    def get_ebay_sold_sample_data(self):
+        """Generate sample sold items data for eBay"""
+        return [
+            {
+                "Title": "Nike Air Jordan 1 Retro High - Sold",
+                "Price": "$250.00",
+                "Brand": "Nike",
+                "Size": "10",
+                "Image": "https://i.ebayimg.com/images/g/aaa/s-l500.jpg",
+                "Link": "https://www.ebay.com/itm/aaa",
+                "Condition": "New",
+                "Seller": "sneaker_king",
+                "SoldDate": "2024-01-10"
+            },
+            {
+                "Title": "Canon EOS R5 Mirrorless Camera - Sold",
+                "Price": "$3,899.00",
+                "Brand": "Canon",
+                "Size": "Full Frame",
+                "Image": "https://i.ebayimg.com/images/g/bbb/s-l500.jpg",
+                "Link": "https://www.ebay.com/itm/bbb",
+                "Condition": "Excellent",
+                "Seller": "camera_pro",
+                "SoldDate": "2024-01-08"
+            }
+        ]
+    
+    def get_vinted_sold_sample_data(self):
+        """Generate sample sold items data for Vinted"""
+        return [
+            {
+                "Title": "Vintage Levi's 501 Jeans - Sold",
+                "Price": "45€",
+                "Brand": "Levi's",
+                "Size": "32",
+                "Image": "https://images.vinted.net/aaa",
+                "Link": "https://www.vinted.co.uk/items/aaa",
+                "Seller": "vintage_lover",
+                "SoldDate": "2024-01-12"
+            },
+            {
+                "Title": "Zara Leather Jacket - Sold",
+                "Price": "85€",
+                "Brand": "Zara",
+                "Size": "M",
+                "Image": "https://images.vinted.net/bbb",
+                "Link": "https://www.vinted.co.uk/items/bbb",
+                "Seller": "fashionista",
+                "SoldDate": "2024-01-11"
+            }
+        ]
     
     def get_vestiaire_sample_data(self):
         """Get sample Vestiaire data"""
