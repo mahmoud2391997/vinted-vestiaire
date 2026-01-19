@@ -675,27 +675,34 @@ class handler(BaseHTTPRequestHandler):
                 # Try to find items using multiple approaches
                 all_data = []
                 
-                # Method 1: Standard eBay selectors
+                # Try Method 1: Standard eBay selectors first
                 items = soup.find_all('li', class_='s-item')
                 if items:
                     print(f"✅ Found {len(items)} items with 's-item' class")
                     all_data = self.extract_from_ebay_items(items, currency_symbol)
                 
-                # Method 2: Alternative selectors
+                # Try Method 2: Alternative selectors
                 if not all_data:
                     items = soup.find_all('div', class_='s-item__wrapper')
                     if items:
                         print(f"✅ Found {len(items)} items with 's-item__wrapper' class")
                         all_data = self.extract_from_ebay_items(items, currency_symbol)
                 
-                # Method 3: Look for item links
+                # Try Method 3: Look for item links
                 if not all_data:
                     item_links = soup.find_all('a', href=lambda x: x and '/itm/' in x)
                     if item_links:
                         print(f"✅ Found {len(item_links)} item links")
                         all_data = self.extract_from_ebay_links(item_links, currency_symbol)
                 
-                # Method 4: Pattern matching (like Vinted's text extraction)
+                # Try Method 4: Direct item container search
+                if not all_data:
+                    items = soup.find_all(['div', 'li'], attrs={'data-testid': lambda x: x and 'item' in x.lower()})
+                    if items:
+                        print(f"✅ Found {len(items)} items with data-testid")
+                        all_data = self.extract_from_ebay_items(items, currency_symbol)
+                
+                # Try Method 5: Pattern matching (last resort)
                 if not all_data:
                     print("🔄 Using pattern matching approach")
                     all_data = self.extract_from_patterns(response.text, search_text, currency_symbol)
@@ -831,47 +838,132 @@ class handler(BaseHTTPRequestHandler):
         return all_data
     
     def extract_from_patterns(self, html_content, search_text, currency_symbol):
-        """Extract data using pattern matching (like Vinted's text approach)"""
+        """Extract data using pattern matching (enhanced for better eBay data extraction)"""
         all_data = []
         
-        # Look for price patterns
-        price_pattern = r'\$?\d+(?:,\d{3})*(?:\.\d{2})?'
-        prices = re.findall(price_pattern, html_content)
+        # Enhanced eBay-specific patterns
+        print("🔍 Using enhanced eBay pattern extraction")
         
-        # Look for title patterns
+        # Look for eBay item links first (most reliable)
+        link_pattern = r'href["\'\s]*=["\'\s]*([^"\'\s>]*ebay[^"\'\s>]*\/itm\/[^"\'\s>]*)'
+        links = re.findall(link_pattern, html_content, re.IGNORECASE)
+        print(f"🔗 Found {len(links)} eBay item links")
+        
+        # Enhanced title patterns for eBay - filter out JavaScript and HTML artifacts
         title_patterns = [
+            r'<h3[^>]*class="[^"]*s-item__title[^"]*"[^>]*>([^<]+)</h3>',
             r'<h3[^>]*>([^<]+)</h3>',
+            r'<a[^>]*class="[^"]*s-item__link[^"]*"[^>]*>([^<]+)</a>',
+            r'<div[^>]*class="[^"]*s-item__title[^"]*"[^>]*>([^<]+)</div>',
             r'title["\'\s]*:["\'\s]*([^"\'\s>]+)',
             r'"title":"([^"]+)"',
-            r'>([^<]{10,100})<'  # Text between tags
+            r'data-track="[^"]*title[^"]*"[^>]*>([^<]+)<',
+            r'>([^<]{15,150})<'  # Longer text between tags for better titles
         ]
         
         titles = []
         for pattern in title_patterns:
             found = re.findall(pattern, html_content, re.IGNORECASE)
-            titles.extend([t for t in found if len(t.strip()) > 5 and search_text.lower() in t.lower()])
+            for title in found:
+                clean_title = title.strip()
+                # Filter out JavaScript, HTML artifacts, and non-product content
+                if any(skip in clean_title.lower() for skip in [
+                    'javascript', 'function', 'var ', 'const ', 'let ', 
+                    'pardon our interruption', 'new date', 'script', 
+                    '<script', '</script>', '{', '}', '=>', 'null',
+                    'document', 'window', 'ssg', 'inlinepayload'
+                ]):
+                    continue
+                    
+                # Clean up common eBay title artifacts
+                clean_title = re.sub(r'\s*(\(\d+\)|\[\d+\]|Shop now on eBay|Opens in a new window or tab)\s*', '', clean_title, flags=re.IGNORECASE)
+                clean_title = re.sub(r'\s+', ' ', clean_title).strip()
+                
+                # Only include meaningful product titles
+                if (len(clean_title) > 10 and len(clean_title) < 200 and 
+                    not clean_title.startswith('$') and 
+                    not clean_title.startswith('{') and
+                    not clean_title.startswith('var') and
+                    search_text.lower() in clean_title.lower()):
+                    titles.append(clean_title)
         
-        # Look for eBay item links
-        link_pattern = r'href["\'\s]*=["\'\s]*([^"\'\s>]*ebay[^"\'\s>]*\/itm\/[^"\'\s>]*)'
-        links = re.findall(link_pattern, html_content, re.IGNORECASE)
+        print(f"📝 Found {len(titles)} valid titles")
         
-        # Create items from patterns
-        num_items = min(len(prices), len(titles), len(links), 20)
+        # Enhanced price patterns for eBay
+        price_patterns = [
+            rf'(\d+[.,]?\d*)\s*{re.escape(currency_symbol)}',
+            rf'(\d+[.,]?\d*)\s*£',
+            rf'(\d+[.,]?\d*)\s*€', 
+            rf'(\d+[.,]?\d*)\s*\$',
+            rf'(\d+(?:,\d{3})*(?:\.\d{2})?)',  # Standard price format
+            r'"price":"([^"]+)"',
+            r'£(\d+(?:\.\d{2})?)',
+            r'\$(\d+(?:\.\d{2})?)'
+        ]
+        
+        prices = []
+        for pattern in price_patterns:
+            found = re.findall(pattern, html_content, re.IGNORECASE)
+            for price in found:
+                if isinstance(price, tuple):
+                    price = price[0] if price[0] else price[1]
+                if price and re.match(r'\d+[.,]?\d*', price):
+                    prices.append(price)
+        
+        print(f"💰 Found {len(prices)} price values")
+        
+        # Look for image URLs
+        image_patterns = [
+            r'src["\'\s]*=["\'\s]*([^"\'\s>]*i\.ebayimg[^"\'\s>]*s-l500[^"\'\s>]*)',
+            r'data-src["\'\s]*=["\'\s]*([^"\'\s>]*i\.ebayimg[^"\'\s>]*)',
+            r'<img[^>]*src["\'\s]*=["\'\s]*([^"\'\s>]*ebayimg[^"\'\s>]*)'
+        ]
+        
+        images = []
+        for pattern in image_patterns:
+            found = re.findall(pattern, html_content, re.IGNORECASE)
+            images.extend(found)
+        
+        print(f"🖼️ Found {len(images)} image URLs")
+        
+        # Look for condition information
+        condition_patterns = [
+            r'<span[^>]*class="[^"]*condition[^"]*"[^>]*>([^<]+)</span>',
+            r'<span[^>]*>(New|Like New|Excellent|Very Good|Good|Used|Refurbished|For Parts)[^<]*</span>',
+            r'"condition":"([^"]+)"'
+        ]
+        
+        conditions = []
+        for pattern in condition_patterns:
+            found = re.findall(pattern, html_content, re.IGNORECASE)
+            conditions.extend([c.strip() for c in found if len(c.strip()) > 2])
+        
+        print(f"🏷️ Found {len(conditions)} condition values")
+        
+        # Create items from extracted data - use available data more flexibly
+        num_items = min(max(len(titles), len(prices)), 20)  # Use max of titles or prices
         
         for i in range(num_items):
+            title = titles[i] if i < len(titles) else f'{search_text.title()} - Item {i+1}'
+            price = f"{prices[i]}{currency_symbol}" if i < len(prices) else 'N/A'
+            link = links[i].strip() if i < len(links) else f'https://www.ebay.co.uk/sch/i.html?_nkw={search_text.replace(" ", "+")}'
+            image = images[i] if i < len(images) else 'N/A'
+            condition = conditions[i] if i < len(conditions) else 'N/A'
+            
             data_dict = {
-                'Title': titles[i].strip() if i < len(titles) else f'{search_text.title()} - Item {i+1}',
-                'Price': f"${prices[i]}" if i < len(prices) else 'N/A',
-                'Brand': self.extract_brand_from_title(titles[i]) if i < len(titles) else 'N/A',
+                'Title': title,
+                'Price': price,
+                'Brand': self.extract_brand_from_title(title),
                 'Size': 'N/A',
-                'Image': 'N/A',
-                'Link': links[i].strip() if i < len(links) else 'N/A',
-                'Condition': 'N/A',
+                'Image': image,
+                'Link': link,
+                'Condition': condition,
                 'Seller': 'N/A'
             }
             
             all_data.append(data_dict)
         
+        print(f"✅ Pattern extraction created {len(all_data)} items")
         return all_data
     
     def create_ebay_fallback_data(self, search_text, page_number, items_per_page, domain, formatted_search, min_price=None, max_price=None):
