@@ -1980,7 +1980,7 @@ class eBayScraper:
         return {'products': [], 'pagination': {'current_page': 1, 'total_pages': 1, 'has_more': False}}
 
 # Main handler
-handler = MyHandler
+handler = handler
 
 # Local server startup
 if __name__ == '__main__':
