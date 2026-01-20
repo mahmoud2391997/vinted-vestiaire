@@ -30,15 +30,16 @@ class eBayAPIScraper:
     def search_items(self, search_text, country='us', limit=10, min_price=None, max_price=None):
         """Search items using eBay Browse API"""
         
-        # First test if API is accessible
-        if not self.test_api_connection():
-            print("⚠️ eBay API not accessible - would need proper OAuth setup")
+        # Get access token first
+        access_token = self.get_access_token()
+        if not access_token:
+            print("❌ Failed to get eBay API access token")
             return {'products': [], 'pagination': {'current_page': 1, 'total_pages': 1, 'has_more': False}}
         
         # Headers for eBay API
         headers = {
             'Content-Type': 'application/json',
-            'Authorization': f'Bearer {self.get_access_token()}',
+            'Authorization': f'Bearer {access_token}',
             'X-EBAY-C-MARKETPLACE-ID': self.country_mapping.get(country, 'EBAY_US'),
             'X-EBAY-C-ENDUSERCTX': 'affiliateCampaignId=123&affiliateReferenceId=456'
         }
@@ -62,24 +63,46 @@ class eBayAPIScraper:
             query['filter'] = ','.join(filters)
         
         try:
-            # Make API request
+            # Make API request with comprehensive error handling
             response = requests.get(
                 f"{self.base_url}/item_summary/search",
                 headers=headers,
                 params=query,
-                timeout=10
+                timeout=15
             )
             
+            # Handle different HTTP status codes
             if response.status_code == 200:
                 data = response.json()
                 return self.format_api_response(data)
+            elif response.status_code == 401:
+                print("❌ eBay API: Invalid or expired token")
+                return {'products': [], 'pagination': {'current_page': 1, 'total_pages': 1, 'has_more': False}, 'error': 'Authentication failed'}
+            elif response.status_code == 403:
+                print("❌ eBay API: Access forbidden - check API permissions")
+                return {'products': [], 'pagination': {'current_page': 1, 'total_pages': 1, 'has_more': False}, 'error': 'Access forbidden'}
+            elif response.status_code == 429:
+                print("❌ eBay API: Rate limit exceeded - please try again later")
+                return {'products': [], 'pagination': {'current_page': 1, 'total_pages': 1, 'has_more': False}, 'error': 'Rate limit exceeded'}
+            elif response.status_code == 500:
+                print("❌ eBay API: Internal server error - please try again later")
+                return {'products': [], 'pagination': {'current_page': 1, 'total_pages': 1, 'has_more': False}, 'error': 'Server error'}
             else:
                 print(f"❌ eBay API Error: {response.status_code} - {response.text}")
-                return {'products': [], 'pagination': {'current_page': 1, 'total_pages': 1, 'has_more': False}}
+                return {'products': [], 'pagination': {'current_page': 1, 'total_pages': 1, 'has_more': False}, 'error': f'API error: {response.status_code}'}
                 
+        except requests.exceptions.Timeout:
+            print("❌ eBay API: Request timeout")
+            return {'products': [], 'pagination': {'current_page': 1, 'total_pages': 1, 'has_more': False}, 'error': 'Request timeout'}
+        except requests.exceptions.ConnectionError:
+            print("❌ eBay API: Connection error")
+            return {'products': [], 'pagination': {'current_page': 1, 'total_pages': 1, 'has_more': False}, 'error': 'Connection error'}
+        except requests.exceptions.RequestException as e:
+            print(f"❌ eBay API: Request exception: {e}")
+            return {'products': [], 'pagination': {'current_page': 1, 'total_pages': 1, 'has_more': False}, 'error': 'Request failed'}
         except Exception as e:
-            print(f"❌ eBay API Exception: {e}")
-            return {'products': [], 'pagination': {'current_page': 1, 'total_pages': 1, 'has_more': False}}
+            print(f"❌ eBay API: Unexpected error: {e}")
+            return {'products': [], 'pagination': {'current_page': 1, 'total_pages': 1, 'has_more': False}, 'error': 'Unexpected error'}
     
     def get_access_token(self):
         """Get OAuth access token for eBay API"""
@@ -106,17 +129,45 @@ class eBayAPIScraper:
                 'scope': 'https://api.ebay.com/oauth/api_scope'
             }
             
-            response = requests.post(token_url, headers=headers, data=data, timeout=10)
+            response = requests.post(token_url, headers=headers, data=data, timeout=15)
             
+            # Handle token request errors
             if response.status_code == 200:
                 token_data = response.json()
-                return token_data.get('access_token')
+                access_token = token_data.get('access_token')
+                if access_token:
+                    print("✅ Successfully obtained eBay API access token")
+                    return access_token
+                else:
+                    print("❌ Token response missing access token")
+                    return None
+            elif response.status_code == 400:
+                print("❌ Token request: Bad request - check credentials")
+                return None
+            elif response.status_code == 401:
+                print("❌ Token request: Invalid credentials")
+                return None
+            elif response.status_code == 403:
+                print("❌ Token request: Forbidden - check app permissions")
+                return None
+            elif response.status_code == 429:
+                print("❌ Token request: Rate limit exceeded")
+                return None
             else:
                 print(f"❌ Token request failed: {response.status_code} - {response.text}")
                 return None
                 
+        except requests.exceptions.Timeout:
+            print("❌ Token request: Timeout")
+            return None
+        except requests.exceptions.ConnectionError:
+            print("❌ Token request: Connection error")
+            return None
+        except requests.exceptions.RequestException as e:
+            print(f"❌ Token request: Request failed - {e}")
+            return None
         except Exception as e:
-            print(f"❌ Token request exception: {e}")
+            print(f"❌ Token request: Unexpected error - {e}")
             return None
     
     def test_api_connection(self):
