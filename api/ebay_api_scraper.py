@@ -3,6 +3,7 @@
 import requests
 import json
 import os
+import base64
 from datetime import datetime
 
 class eBayAPIScraper:
@@ -83,9 +84,40 @@ class eBayAPIScraper:
     def get_access_token(self):
         """Get OAuth access token for eBay API"""
         
-        # For demo purposes, return a mock token
-        # In production, you'd implement proper OAuth flow
-        return 'mock_access_token_for_demo'
+        # Load credentials from environment
+        app_id = os.getenv('EBAY_APP_ID')
+        cert_id = os.getenv('EBAY_CERT_ID')
+        
+        if not app_id or not cert_id:
+            print("❌ Missing eBay API credentials")
+            return None
+        
+        try:
+            # eBay OAuth 2.0 token endpoint
+            token_url = "https://api.ebay.com/identity/v1/oauth2/token"
+            
+            headers = {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'Authorization': f'Basic {base64.b64encode(f"{app_id}:{cert_id}".encode()).decode()}'
+            }
+            
+            data = {
+                'grant_type': 'client_credentials',
+                'scope': 'https://api.ebay.com/oauth/api_scope'
+            }
+            
+            response = requests.post(token_url, headers=headers, data=data, timeout=10)
+            
+            if response.status_code == 200:
+                token_data = response.json()
+                return token_data.get('access_token')
+            else:
+                print(f"❌ Token request failed: {response.status_code} - {response.text}")
+                return None
+                
+        except Exception as e:
+            print(f"❌ Token request exception: {e}")
+            return None
     
     def test_api_connection(self):
         """Test if eBay API is accessible"""
