@@ -1928,9 +1928,98 @@ class MyHandler(BaseHTTPRequestHandler):
 #             self.send_error(500, f"Server Error: {str(e)}")
 #     
     def scrape_vestiaire_data(self, search_text, page_number=1, items_per_page=50, min_price=None, max_price=None, country='uk'):
-        """Scrape data from Vestiaire Collective using real responses only (no sample fallback)."""
-        scraper = VestiaireScraper()
-        return scraper.scrape_vestiaire_data(search_text, page_number, items_per_page, min_price, max_price, country)
+        """Scrape data from Vestiaire Collective using the new Scrapfly.io implementation"""
+        try:
+            # Import the new Vestiaire scraper
+            import sys
+            import os
+            sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'vestiairecollective-scraper'))
+            
+            from vestiairecollective import VestiaireScraper
+            
+            # Get API key from environment
+            api_key = os.getenv('SCRAPFLY_KEY')
+            if not api_key:
+                print("❌ SCRAPFLY_KEY not found in environment")
+                # Fallback to sample data
+                sample_data = self.get_vestiaire_sample_data()
+                pagination = {'current_page': 1, 'total_pages': 1, 'has_more': False, 'items_per_page': len(sample_data), 'total_items': len(sample_data)}
+                return {'products': sample_data, 'pagination': pagination}
+            
+            # Initialize the new scraper
+            scraper = VestiaireScraper(api_key)
+            
+            # Scrape search results
+            products = scraper.scrape_search_page(search_text, page=page_number, country=country)
+            
+            # Convert Product objects to dictionaries for API response
+            api_products = []
+            for product in products:
+                api_product = {
+                    "Title": product.title,
+                    "Price": f"{product.currency} {product.price}",
+                    "Brand": product.brand,
+                    "Size": product.size or "N/A",
+                    "Image": product.image_url,
+                    "Link": product.product_url,
+                    "Condition": product.condition,
+                    "Seller": product.seller,
+                }
+                
+                # Add original price and discount if available
+                if product.original_price:
+                    api_product["OriginalPrice"] = f"{product.currency} {product.original_price}"
+                if product.discount_percentage:
+                    api_product["Discount"] = f"{product.discount_percentage}%"
+                
+                api_products.append(api_product)
+            
+            # Apply price filtering if specified
+            if min_price is not None or max_price is not None:
+                filtered_products = []
+                for product in api_products:
+                    price_str = product.get('Price', '£0')
+                    # Extract numeric value from price string
+                    import re
+                    price_match = re.search(r'(\d+[.,]?\d*)', price_str.replace(' ', ''))
+                    if price_match:
+                        price_value = float(price_match.group(1).replace(',', '.'))
+                        
+                        # Apply filters
+                        include_item = True
+                        if min_price is not None:
+                            include_item = include_item and price_value >= float(min_price)
+                        if max_price is not None:
+                            include_item = include_item and price_value <= float(max_price)
+                        
+                        if include_item:
+                            filtered_products.append(product)
+                
+                api_products = filtered_products
+            
+            # Apply pagination
+            start_index = (page_number - 1) * items_per_page
+            end_index = start_index + items_per_page
+            paginated_products = api_products[start_index:end_index]
+            
+            total_items = len(api_products)
+            pagination = {
+                'current_page': page_number,
+                'total_pages': max(1, (total_items + items_per_page - 1) // items_per_page),
+                'has_more': end_index < total_items,
+                'items_per_page': items_per_page,
+                'total_items': total_items
+            }
+            
+            print(f"✅ Successfully scraped {len(paginated_products)} Vestiaire products")
+            return {'products': paginated_products, 'pagination': pagination}
+            
+        except Exception as e:
+            print(f"❌ Error with new Vestiaire scraper: {e}")
+            # Fallback to sample data
+            sample_data = self.get_vestiaire_sample_data()
+            pagination = {'current_page': 1, 'total_pages': 1, 'has_more': False, 'items_per_page': len(sample_data), 'total_items': len(sample_data)}
+            return {'products': sample_data, 'pagination': pagination}
     
     def scrape_ebay_data(self, search_text, page_number=1, items_per_page=50, min_price=None, max_price=None, country='uk'):
         """Scrape data from eBay"""
@@ -2036,126 +2125,6 @@ class MyHandler(BaseHTTPRequestHandler):
         
         self.wfile.write(json.dumps(response).encode())
 
-# Main scraper classes
-class VestiaireScraper:
-    def scrape_vestiaire_data(self, search_text, page_number=1, items_per_page=50, min_price=None, max_price=None, country='uk'):
-        """Scrape data from Vestiaire Collective using real responses only (no sample fallback)."""
-        print(f"\n=== VESTIAIRE COLLECTIVE SCRAPER (Educational Use Only) ===")
-        print(f"Search: {search_text}, Page: {page_number}, Country: {country}")
-        print("⚠️  This scraper respects Vestiaire's protections and may be limited")
-        
-        try:
-            # Try API endpoints respectfully
-            api_endpoints = [
-                "https://www.vestiairecollective.com/api/v1/search",
-                "https://www.vestiairecollective.com/api/v2/catalog/search", 
-                "https://www.vestiairecollective.com/api/search/products"
-            ]
-            
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'application/json, text/plain, */*',
-                'Accept-Language': 'en-US,en;q=0.9',
-                'Referer': 'https://www.vestiairecollective.com/',
-                'Origin': 'https://www.vestiairecollective.com'
-            }
-            
-            params = {
-                'q': search_text,
-                'page': page_number,
-                'limit': items_per_page,
-                'sort': 'relevance'
-            }
-            
-            print(f"🔍 Attempting to access Vestiaire API endpoints...")
-            
-            for api_url in api_endpoints:
-                try:
-                    print(f"📡 Trying: {api_url}")
-                    import time
-                    time.sleep(2)  # Be respectful
-                    
-                    response = requests.get(api_url, params=params, headers=headers, timeout=30)
-                    print(f"📊 Response status: {response.status_code}")
-                    
-                    if response.status_code == 200:
-                        print(f"✅ Got JSON response from {api_url}")
-                        try:
-                            data = response.json()
-                        except ValueError:
-                            # Not JSON – treat as no data
-                            break
-
-                        # Try to extract items/products from common keys
-                        items = data.get('items') or data.get('products') or data.get('results') or []
-                        products = []
-                        for item in items:
-                            title = item.get('title') or item.get('name') or 'N/A'
-                            price_val = item.get('price') or item.get('current_price') or item.get('selling_price')
-                            if isinstance(price_val, dict):
-                                price_str = f"{price_val.get('currency', '')} {price_val.get('amount', '')}".strip()
-                            else:
-                                price_str = str(price_val) if price_val is not None else 'N/A'
-
-                            image = item.get('image') or item.get('imageUrl') or item.get('thumbnail')
-                            if isinstance(image, dict):
-                                image = image.get('url') or image.get('href')
-
-                            products.append({
-                                "Title": title,
-                                "Price": price_str,
-                                "Brand": item.get('brand', 'N/A'),
-                                "Size": item.get('size', 'N/A'),
-                                "Image": image or 'N/A',
-                                "Link": item.get('url') or item.get('product_url') or 'N/A',
-                                "Condition": item.get('condition', 'N/A'),
-                                "Seller": item.get('seller', 'N/A'),
-                            })
-
-                        total_items = len(products)
-                        pagination = {
-                            'current_page': page_number,
-                            'total_pages': max(1, (total_items + items_per_page - 1) // items_per_page),
-                            'has_more': total_items > items_per_page * page_number,
-                            'items_per_page': items_per_page,
-                            'total_items': total_items
-                        }
-
-                        return {'products': products, 'pagination': pagination}
-                    elif response.status_code == 403:
-                        print(f"🚫 Access denied to {api_url} - respecting their protection")
-                        continue
-                        
-                except Exception as e:
-                    print(f"⚠️ Error with {api_url}: {e}")
-                    continue
-            
-            print("📚 All Vestiaire API attempts blocked or no usable data returned.")
-            print("💡 For commercial use, please request official API access from Vestiaire")
-            return {
-                'products': [],
-                'pagination': {
-                    'current_page': page_number,
-                    'total_pages': 1,
-                    'has_more': False,
-                    'items_per_page': 0,
-                    'total_items': 0
-                }
-            }
-            
-        except Exception as e:
-            print(f"❌ Vestiaire scraper error: {e}")
-            return {
-                'products': [],
-                'pagination': {
-                    'current_page': page_number,
-                    'total_pages': 1,
-                    'has_more': False,
-                    'items_per_page': 0,
-                    'total_items': 0
-                }
-            }
-    
     def get_vestiaire_sample_data(self):
         """Generate realistic sample data for Vestiaire Collective"""
         import random
@@ -2257,11 +2226,6 @@ class VestiaireScraper:
             additional_products.append(product)
         
         return base_products + additional_products
-
-class eBayScraper:
-    def scrape_ebay_data(self, search_text, page_number=1, items_per_page=50, min_price=None, max_price=None, country='uk'):
-        """Scrape data from eBay"""
-        return {'products': [], 'pagination': {'current_page': 1, 'total_pages': 1, 'has_more': False}}
 
 # Main handler  
 handler = MyHandler

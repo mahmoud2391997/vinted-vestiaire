@@ -1,27 +1,30 @@
-# 📱 Frontend API Documentation
+# 📱 Frontend Integration README
 
-**eBay & Vinted Scraping API - Frontend Integration Guide**
-
-## 🌐 API Endpoints
-
-### Local Development Server
-```
-http://localhost:8099
-```
-
-### eBay Search API
-```http
-GET http://localhost:8099/ebay
-```
-
-### Vinted Search API
-```http
-GET http://localhost:8099/
-```
+**Goal:** this guide shows **frontend developers** how to call the scraping API (locally or in production) from JavaScript/TypeScript apps (React, Next.js, etc.).
 
 ---
 
-## 🚀 Quick Start for Frontend
+## 🌐 Base URLs
+
+- **Local development** (when you run the server yourself):
+  - `http://localhost:8099`
+- **Production demo** (already deployed):
+  - `https://vinted-scraping.vercel.app/`
+
+In all examples below:
+- Replace `http://localhost:8099` with `https://vinted-scraping.vercel.app` when calling the **live API**.
+
+### Key Endpoints
+
+- **Vinted search**: `GET /`
+- **eBay search**: `GET /ebay`
+- **eBay sold items**: `GET /ebay/sold`
+- **Vinted sold items**: `GET /vinted/sold`
+- **Vestiaire**: `GET /vestiaire`
+
+---
+
+## 🚀 Quick Start (Frontend)
 
 ### 1. Basic API Call (JavaScript)
 

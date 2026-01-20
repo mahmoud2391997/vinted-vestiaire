@@ -2,6 +2,14 @@
 
 🚀 **Production-ready REST API for scraping eBay and Vinted marketplaces with advanced search, price filtering, and pagination**
 
+## 📘 How to Use (Quick Guide)
+
+See `HOW_TO_USE.md` for:
+- Local setup + install
+- How to run the API server
+- All endpoints + example requests
+- Optional eBay credentials setup
+
 ## 🌐 Local Server
 
 **http://localhost:8099** (when running locally)
