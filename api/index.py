@@ -199,7 +199,7 @@ class MyHandler(BaseHTTPRequestHandler):
                 print(f"❌ All eBay methods failed: {e}")
                 self.send_json_response([], {'current_page': 1, 'total_pages': 1, 'has_more': False, 'items_per_page': 0, 'total_items': 0}, error=f"Scraping failed: {str(e)}")
         elif parsed_path.path == '/ebay/sold':
-            # eBay sold items endpoint
+            # eBay sold items endpoint - real data only (no sample fallback)
             query_params = parse_qs(parsed_path.query)
             search_text = query_params.get('search', ['laptop'])[0]
             page_number = int(query_params.get('page', ['1'])[0])
@@ -209,14 +209,28 @@ class MyHandler(BaseHTTPRequestHandler):
             country = query_params.get('country', ['uk'])[0]
             
             try:
-                # Use sample data for sold items (API endpoint not available)
-                sample_data = self.get_ebay_sold_sample_data()
-                pagination = {'current_page': 1, 'total_pages': 1, 'has_more': False, 'items_per_page': len(sample_data), 'total_items': len(sample_data)}
-                self.send_json_response(sample_data, pagination)
+                data = self.scrape_ebay_working(
+                    search_text,
+                    page_number,
+                    items_per_page,
+                    min_price,
+                    max_price,
+                    country,
+                    sold_only=True
+                )
+                self.send_json_response(data['products'], data['pagination'])
             except Exception as e:
-                self.send_error(500, f"Server Error: {str(e)}")
+                # Return empty, real-only response with clear error instead of sample data
+                empty_pagination = {
+                    'current_page': 1,
+                    'total_pages': 1,
+                    'has_more': False,
+                    'items_per_page': 0,
+                    'total_items': 0
+                }
+                self.send_json_response([], empty_pagination, error=f"eBay sold items scraping failed: {str(e)}")
         elif parsed_path.path == '/vinted/sold':
-            # Vinted sold items endpoint
+            # Vinted sold items endpoint - real data only (no sample fallback)
             query_params = parse_qs(parsed_path.query)
             search_text = query_params.get('search', ['t-shirt'])[0]
             page_number = int(query_params.get('page', ['1'])[0])
@@ -226,12 +240,26 @@ class MyHandler(BaseHTTPRequestHandler):
             country = query_params.get('country', ['uk'])[0]
             
             try:
-                # Use sample data for sold items (API endpoint not available)
-                sample_data = self.get_vinted_sold_sample_data()
-                pagination = {'current_page': 1, 'total_pages': 1, 'has_more': False, 'items_per_page': len(sample_data), 'total_items': len(sample_data)}
-                self.send_json_response(sample_data, pagination)
+                data = self.scrape_vinted_data(
+                    search_text,
+                    page_number,
+                    items_per_page,
+                    min_price,
+                    max_price,
+                    country,
+                    sold_only=True
+                )
+                self.send_json_response(data['products'], data['pagination'])
             except Exception as e:
-                self.send_error(500, f"Server Error: {str(e)}")
+                # Return empty, real-only response with clear error instead of sample data
+                empty_pagination = {
+                    'current_page': 1,
+                    'total_pages': 1,
+                    'has_more': False,
+                    'items_per_page': 0,
+                    'total_items': 0
+                }
+                self.send_json_response([], empty_pagination, error=f"Vinted sold items scraping failed: {str(e)}")
         elif parsed_path.path == '/vestiaire':
             # Vestiaire Collective scraping endpoint
             query_params = parse_qs(parsed_path.query)
@@ -290,7 +318,7 @@ class MyHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(content.encode('utf-8'))
     
-    def scrape_vinted_data(self, search_text, page_number=1, items_per_page=50, min_price=None, max_price=None, country='uk'):
+    def scrape_vinted_data(self, search_text, page_number=1, items_per_page=50, min_price=None, max_price=None, country='uk', sold_only=False):
         """Scrape data from Vinted using requests and BeautifulSoup"""
         # Create a cache key for this search
         cache_key = f"{search_text}_{page_number}_{items_per_page}_{country}"
@@ -370,7 +398,12 @@ class MyHandler(BaseHTTPRequestHandler):
                 
                 domain = country_domains.get(country.lower(), 'vinted.co.uk')
                 currency_symbol = country_currencies.get(country.lower(), '£')
-                url = f"https://www.{domain}/catalog?search_text={formatted_search}&page={page}"
+                
+                # Build Vinted catalog URL; when sold_only is True we explicitly request sold items
+                base_query = f"search_text={formatted_search}&page={page}"
+                if sold_only:
+                    base_query += "&status=sold"
+                url = f"https://www.{domain}/catalog?{base_query}"
                 
                 # Make request
                 headers = {
@@ -607,8 +640,11 @@ class MyHandler(BaseHTTPRequestHandler):
         
         return data
     
-    def scrape_ebay_working(self, search_text, page_number=1, items_per_page=50, min_price=None, max_price=None, country='uk'):
-        """eBay scraper using Vinted technique but adapted for eBay's anti-bot"""
+    def scrape_ebay_working(self, search_text, page_number=1, items_per_page=50, min_price=None, max_price=None, country='uk', sold_only=False):
+        """eBay scraper using Vinted technique but adapted for eBay's anti-bot.
+        
+        When sold_only is True, this targets completed/sold listings on eBay.
+        """
         print(f"\n=== ADAPTED EBAY SCRAPER (Vinted Technique) ===")
         print(f"Search: {search_text}, Page: {page_number}, Country: {country}")
         
@@ -697,7 +733,22 @@ class MyHandler(BaseHTTPRequestHandler):
         formatted_search = search_text.replace(' ', '+')
         
         # Build eBay search URL
-        url = f"https://www.{domain}/sch/i.html?_nkw={formatted_search}&_pgn={page_number}&_ipg={items_per_page}"
+        if sold_only:
+            # Use eBay's completed/sold filters
+            url = (
+                f"https://www.{domain}/sch/i.html"
+                f"?_nkw={formatted_search}"
+                f"&_pgn={page_number}"
+                f"&_ipg={items_per_page}"
+                f"&LH_Complete=1&LH_Sold=1"
+            )
+        else:
+            url = (
+                f"https://www.{domain}/sch/i.html"
+                f"?_nkw={formatted_search}"
+                f"&_pgn={page_number}"
+                f"&_ipg={items_per_page}"
+            )
         
         print(f"🌐 Scraping eBay URL: {url}")
         
@@ -1876,8 +1927,8 @@ class MyHandler(BaseHTTPRequestHandler):
 #         except Exception as e:
 #             self.send_error(500, f"Server Error: {str(e)}")
 #     
-#     def scrape_vestiaire_data(self, search_text, page_number=1, items_per_page=50, min_price=None, max_price=None, country='uk'):
-#         """Scrape data from Vestiaire Collective - Educational/Research Use Only"""
+    def scrape_vestiaire_data(self, search_text, page_number=1, items_per_page=50, min_price=None, max_price=None, country='uk'):
+        """Scrape data from Vestiaire Collective using real responses only (no sample fallback)."""
         scraper = VestiaireScraper()
         return scraper.scrape_vestiaire_data(search_text, page_number, items_per_page, min_price, max_price, country)
     
@@ -1988,7 +2039,7 @@ class MyHandler(BaseHTTPRequestHandler):
 # Main scraper classes
 class VestiaireScraper:
     def scrape_vestiaire_data(self, search_text, page_number=1, items_per_page=50, min_price=None, max_price=None, country='uk'):
-        """Scrape data from Vestiaire Collective - Educational/Research Use Only"""
+        """Scrape data from Vestiaire Collective using real responses only (no sample fallback)."""
         print(f"\n=== VESTIAIRE COLLECTIVE SCRAPER (Educational Use Only) ===")
         print(f"Search: {search_text}, Page: {page_number}, Country: {country}")
         print("⚠️  This scraper respects Vestiaire's protections and may be limited")
@@ -2029,8 +2080,48 @@ class VestiaireScraper:
                     
                     if response.status_code == 200:
                         print(f"✅ Got JSON response from {api_url}")
-                        # Parse and return real data
-                        return {'products': self.get_vestiaire_sample_data(), 'pagination': {'current_page': 1, 'total_pages': 1, 'has_more': False}}
+                        try:
+                            data = response.json()
+                        except ValueError:
+                            # Not JSON – treat as no data
+                            break
+
+                        # Try to extract items/products from common keys
+                        items = data.get('items') or data.get('products') or data.get('results') or []
+                        products = []
+                        for item in items:
+                            title = item.get('title') or item.get('name') or 'N/A'
+                            price_val = item.get('price') or item.get('current_price') or item.get('selling_price')
+                            if isinstance(price_val, dict):
+                                price_str = f"{price_val.get('currency', '')} {price_val.get('amount', '')}".strip()
+                            else:
+                                price_str = str(price_val) if price_val is not None else 'N/A'
+
+                            image = item.get('image') or item.get('imageUrl') or item.get('thumbnail')
+                            if isinstance(image, dict):
+                                image = image.get('url') or image.get('href')
+
+                            products.append({
+                                "Title": title,
+                                "Price": price_str,
+                                "Brand": item.get('brand', 'N/A'),
+                                "Size": item.get('size', 'N/A'),
+                                "Image": image or 'N/A',
+                                "Link": item.get('url') or item.get('product_url') or 'N/A',
+                                "Condition": item.get('condition', 'N/A'),
+                                "Seller": item.get('seller', 'N/A'),
+                            })
+
+                        total_items = len(products)
+                        pagination = {
+                            'current_page': page_number,
+                            'total_pages': max(1, (total_items + items_per_page - 1) // items_per_page),
+                            'has_more': total_items > items_per_page * page_number,
+                            'items_per_page': items_per_page,
+                            'total_items': total_items
+                        }
+
+                        return {'products': products, 'pagination': pagination}
                     elif response.status_code == 403:
                         print(f"🚫 Access denied to {api_url} - respecting their protection")
                         continue
@@ -2039,13 +2130,31 @@ class VestiaireScraper:
                     print(f"⚠️ Error with {api_url}: {e}")
                     continue
             
-            print("📚 All API attempts blocked - returning educational sample data")
+            print("📚 All Vestiaire API attempts blocked or no usable data returned.")
             print("💡 For commercial use, please request official API access from Vestiaire")
-            return {'products': self.get_vestiaire_sample_data(), 'pagination': {'current_page': 1, 'total_pages': 1, 'has_more': False}}
+            return {
+                'products': [],
+                'pagination': {
+                    'current_page': page_number,
+                    'total_pages': 1,
+                    'has_more': False,
+                    'items_per_page': 0,
+                    'total_items': 0
+                }
+            }
             
         except Exception as e:
             print(f"❌ Vestiaire scraper error: {e}")
-            return {'products': self.get_vestiaire_sample_data(), 'pagination': {'current_page': 1, 'total_pages': 1, 'has_more': False}}
+            return {
+                'products': [],
+                'pagination': {
+                    'current_page': page_number,
+                    'total_pages': 1,
+                    'has_more': False,
+                    'items_per_page': 0,
+                    'total_items': 0
+                }
+            }
     
     def get_vestiaire_sample_data(self):
         """Generate realistic sample data for Vestiaire Collective"""
