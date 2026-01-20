@@ -1757,106 +1757,106 @@ class MyHandler(BaseHTTPRequestHandler):
         
         return base_products + additional_products
 
-# HTTP Request Handler
-class MyHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        try:
-            parsed_path = urlparse(self.path)
-            
-            if parsed_path.path == '/':
-                # Main API endpoint
-                query_params = parse_qs(parsed_path.query)
-                search_text = query_params.get('search', ['bags'])[0]
-                page_number = int(query_params.get('page', ['1'])[0])
-                items_per_page = int(query_params.get('items_per_page', ['20'])[0])
-                min_price = query_params.get('min_price')
-                max_price = query_params.get('max_price')
-                country = query_params.get('country', ['uk'])[0]
-                
-                # Route to appropriate scraper
-                if 'vestiaire' in search_text.lower() or parsed_path.path == '/vestiaire':
-                    data = self.scrape_vestiaire_data(search_text, page_number, items_per_page, min_price, max_price, country)
-                else:
-                    data = self.scrape_ebay_data(search_text, page_number, items_per_page, min_price, max_price, country)
-                
-                self.send_json_response(data['products'], data['pagination'])
-                
-            elif parsed_path.path == '/vestiaire':
-                # Vestiaire Collective scraping endpoint
-                query_params = parse_qs(parsed_path.query)
-                search_text = query_params.get('search', ['handbag'])[0]
-                page_number = int(query_params.get('page', ['1'])[0])
-                items_per_page = int(query_params.get('items_per_page', ['20'])[0])
-                min_price = query_params.get('min_price')
-                max_price = query_params.get('max_price')
-                country = query_params.get('country', ['uk'])[0]
-                
-                try:
-                    data = self.scrape_vestiaire_data(search_text, page_number, items_per_page, min_price, max_price, country)
-                    self.send_json_response(data['products'], data['pagination'])
-                except Exception as e:
-                    sample_data = self.get_vestiaire_sample_data()
-                    pagination = {'current_page': 1, 'total_pages': 1, 'has_more': False, 'items_per_page': len(sample_data), 'total_items': len(sample_data)}
-                    self.send_json_response(sample_data, pagination, error=str(e))
-            elif parsed_path.path == '/ebay':
-                # eBay scraping endpoint
-                query_params = parse_qs(parsed_path.query)
-                search_text = query_params.get('search', ['electronics'])[0]
-                page_number = int(query_params.get('page', ['1'])[0])
-                items_per_page = int(query_params.get('items_per_page', ['20'])[0])
-                min_price = query_params.get('min_price')
-                max_price = query_params.get('max_price')
-                country = query_params.get('country', ['uk'])[0]
-                
-                try:
-                    data = self.scrape_ebay_data(search_text, page_number, items_per_page, min_price, max_price, country)
-                    self.send_json_response(data['products'], data['pagination'])
-                except Exception as e:
-                    sample_data = self.get_ebay_sample_data()
-                    pagination = {'current_page': 1, 'total_pages': 1, 'has_more': False, 'items_per_page': len(sample_data), 'total_items': len(sample_data)}
-                    self.send_json_response(sample_data, pagination, error=str(e))
-                    
-            elif parsed_path.path == '/ebay/sold':
-                # eBay sold items endpoint
-                query_params = parse_qs(parsed_path.query)
-                search_text = query_params.get('search', ['electronics'])[0]
-                page_number = int(query_params.get('page', ['1'])[0])
-                items_per_page = int(query_params.get('items_per_page', ['20'])[0])
-                min_price = query_params.get('min_price')
-                max_price = query_params.get('max_price')
-                country = query_params.get('country', ['uk'])[0]
-                
-                try:
-                    sample_data = self.get_ebay_sold_sample_data()
-                    pagination = {'current_page': 1, 'total_pages': 1, 'has_more': False, 'items_per_page': len(sample_data), 'total_items': len(sample_data)}
-                    self.send_json_response(sample_data, pagination)
-                except Exception as e:
-                    self.send_error(500, f"Server Error: {str(e)}")
-                    
-            elif parsed_path.path == '/vinted/sold':
-                # Vinted sold items endpoint
-                query_params = parse_qs(parsed_path.query)
-                search_text = query_params.get('search', ['fashion'])[0]
-                page_number = int(query_params.get('page', ['1'])[0])
-                items_per_page = int(query_params.get('items_per_page', ['20'])[0])
-                min_price = query_params.get('min_price')
-                max_price = query_params.get('max_price')
-                country = query_params.get('country', ['uk'])[0]
-                
-                try:
-                    sample_data = self.get_vinted_sold_sample_data()
-                    pagination = {'current_page': 1, 'total_pages': 1, 'has_more': False, 'items_per_page': len(sample_data), 'total_items': len(sample_data)}
-                    self.send_json_response(sample_data, pagination)
-                except Exception as e:
-                    self.send_error(500, f"Server Error: {str(e)}")
-            else:
-                self.send_error(404, "Not Found")
-                
-        except Exception as e:
-            self.send_error(500, f"Server Error: {str(e)}")
-    
-    def scrape_vestiaire_data(self, search_text, page_number=1, items_per_page=50, min_price=None, max_price=None, country='uk'):
-        """Scrape data from Vestiaire Collective - Educational/Research Use Only"""
+# HTTP Request Handler (DUPLICATE - COMMENTED OUT)
+# class MyHandler(BaseHTTPRequestHandler):
+#     def do_GET(self):
+#         try:
+#             parsed_path = urlparse(self.path)
+#             
+#             if parsed_path.path == '/':
+#                 # Main API endpoint
+#                 query_params = parse_qs(parsed_path.query)
+#                 search_text = query_params.get('search', ['bags'])[0]
+#                 page_number = int(query_params.get('page', ['1'])[0])
+#                 items_per_page = int(query_params.get('items_per_page', ['20'])[0])
+#                 min_price = query_params.get('min_price')
+#                 max_price = query_params.get('max_price')
+#                 country = query_params.get('country', ['uk'])[0]
+#                 
+#                 # Route to appropriate scraper
+#                 if 'vestiaire' in search_text.lower() or parsed_path.path == '/vestiaire':
+#                     data = self.scrape_vestiaire_data(search_text, page_number, items_per_page, min_price, max_price, country)
+#                 else:
+#                     data = self.scrape_ebay_data(search_text, page_number, items_per_page, min_price, max_price, country)
+#                 
+#                 self.send_json_response(data['products'], data['pagination'])
+#                 
+#             elif parsed_path.path == '/vestiaire':
+#                 # Vestiaire Collective scraping endpoint
+#                 query_params = parse_qs(parsed_path.query)
+#                 search_text = query_params.get('search', ['handbag'])[0]
+#                 page_number = int(query_params.get('page', ['1'])[0])
+#                 items_per_page = int(query_params.get('items_per_page', ['20'])[0])
+#                 min_price = query_params.get('min_price')
+#                 max_price = query_params.get('max_price')
+#                 country = query_params.get('country', ['uk'])[0]
+#                 
+#                 try:
+#                     data = self.scrape_vestiaire_data(search_text, page_number, items_per_page, min_price, max_price, country)
+#                     self.send_json_response(data['products'], data['pagination'])
+#                 except Exception as e:
+#                     sample_data = self.get_vestiaire_sample_data()
+#                     pagination = {'current_page': 1, 'total_pages': 1, 'has_more': False, 'items_per_page': len(sample_data), 'total_items': len(sample_data)}
+#                     self.send_json_response(sample_data, pagination, error=str(e))
+#             elif parsed_path.path == '/ebay':
+#                 # eBay scraping endpoint
+#                 query_params = parse_qs(parsed_path.query)
+#                 search_text = query_params.get('search', ['electronics'])[0]
+#                 page_number = int(query_params.get('page', ['1'])[0])
+#                 items_per_page = int(query_params.get('items_per_page', ['20'])[0])
+#                 min_price = query_params.get('min_price')
+#                 max_price = query_params.get('max_price')
+#                 country = query_params.get('country', ['uk'])[0]
+#                 
+#                 try:
+#                     data = self.scrape_ebay_data(search_text, page_number, items_per_page, min_price, max_price, country)
+#                     self.send_json_response(data['products'], data['pagination'])
+#                 except Exception as e:
+#                     sample_data = self.get_ebay_sample_data()
+#                     pagination = {'current_page': 1, 'total_pages': 1, 'has_more': False, 'items_per_page': len(sample_data), 'total_items': len(sample_data)}
+#                     self.send_json_response(sample_data, pagination, error=str(e))
+#                     
+#             elif parsed_path.path == '/ebay/sold':
+#                 # eBay sold items endpoint
+#                 query_params = parse_qs(parsed_path.query)
+#                 search_text = query_params.get('search', ['electronics'])[0]
+#                 page_number = int(query_params.get('page', ['1'])[0])
+#                 items_per_page = int(query_params.get('items_per_page', ['20'])[0])
+#                 min_price = query_params.get('min_price')
+#                 max_price = query_params.get('max_price')
+#                 country = query_params.get('country', ['uk'])[0]
+#                 
+#                 try:
+#                     sample_data = self.get_ebay_sold_sample_data()
+#                     pagination = {'current_page': 1, 'total_pages': 1, 'has_more': False, 'items_per_page': len(sample_data), 'total_items': len(sample_data)}
+#                     self.send_json_response(sample_data, pagination)
+#                 except Exception as e:
+#                     self.send_error(500, f"Server Error: {str(e)}")
+#                     
+#             elif parsed_path.path == '/vinted/sold':
+#                 # Vinted sold items endpoint
+#                 query_params = parse_qs(parsed_path.query)
+#                 search_text = query_params.get('search', ['fashion'])[0]
+#                 page_number = int(query_params.get('page', ['1'])[0])
+#                 items_per_page = int(query_params.get('items_per_page', ['20'])[0])
+#                 min_price = query_params.get('min_price')
+#                 max_price = query_params.get('max_price')
+#                 country = query_params.get('country', ['uk'])[0]
+#                 
+#                 try:
+#                     sample_data = self.get_vinted_sold_sample_data()
+#                     pagination = {'current_page': 1, 'total_pages': 1, 'has_more': False, 'items_per_page': len(sample_data), 'total_items': len(sample_data)}
+#                     self.send_json_response(sample_data, pagination)
+#                 except Exception as e:
+#                     self.send_error(500, f"Server Error: {str(e)}")
+#             else:
+#                 self.send_error(404, "Not Found")
+#                 
+#         except Exception as e:
+#             self.send_error(500, f"Server Error: {str(e)}")
+#     
+#     def scrape_vestiaire_data(self, search_text, page_number=1, items_per_page=50, min_price=None, max_price=None, country='uk'):
+#         """Scrape data from Vestiaire Collective - Educational/Research Use Only"""
         scraper = VestiaireScraper()
         return scraper.scrape_vestiaire_data(search_text, page_number, items_per_page, min_price, max_price, country)
     
