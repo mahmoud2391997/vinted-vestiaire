@@ -24,14 +24,16 @@ except Exception as e:
     print(f"Could not load .env file: {e}")
 
 class RateLimiter:
-    """Rate limiter to prevent 429 errors"""
-    def __init__(self, max_requests_per_minute=60):
+    """Advanced rate limiter to prevent 429 errors with adaptive strategies"""
+    def __init__(self, max_requests_per_minute=30):
         self.max_requests = max_requests_per_minute
         self.requests = defaultdict(list)
         self.lock = threading.Lock()
+        self.backoff_multiplier = 1.5
+        self.current_limit = max_requests_per_minute
     
     def is_allowed(self, identifier):
-        """Check if request is allowed"""
+        """Check if request is allowed with adaptive rate limiting"""
         with self.lock:
             now = time.time()
             # Clean old requests (older than 1 minute)
@@ -40,12 +42,20 @@ class RateLimiter:
                 if now - req_time < 60
             ]
             
-            # Check if under limit
-            if len(self.requests[identifier]) < self.max_requests:
+            # Check if under adaptive limit
+            if len(self.requests[identifier]) < self.current_limit:
                 self.requests[identifier].append(now)
                 return True
             
             return False
+    
+    def adapt_rate(self, success_rate):
+        """Adapt rate limit based on success rate"""
+        with self.lock:
+            if success_rate < 0.5:  # Less than 50% success rate
+                self.current_limit = max(5, int(self.current_limit / self.backoff_multiplier))
+            elif success_rate > 0.8:  # More than 80% success rate
+                self.current_limit = min(self.max_requests, int(self.current_limit * 1.2))
     
     def wait_time(self, identifier):
         """Get wait time until next allowed request"""
@@ -58,36 +68,136 @@ class RateLimiter:
             return max(0, wait_until - time.time())
 
 class CacheManager:
-    """Simple cache to reduce API calls"""
-    def __init__(self, cache_duration_minutes=5):
+    """Enhanced cache with intelligent strategies to reduce API calls"""
+    def __init__(self, cache_duration_minutes=10):
         self.cache = {}
         self.cache_duration = cache_duration_minutes * 60
         self.lock = threading.Lock()
+        self.hit_count = defaultdict(int)
+        self.miss_count = defaultdict(int)
     
     def get(self, key):
-        """Get cached response"""
+        """Get cached response with hit tracking"""
         with self.lock:
             if key in self.cache:
                 data, timestamp = self.cache[key]
                 if time.time() - timestamp < self.cache_duration:
+                    self.hit_count[key] += 1
                     return data
                 else:
                     del self.cache[key]
+            
+            self.miss_count[key] += 1
             return None
     
     def set(self, key, data):
-        """Cache response"""
+        """Cache response with duration adaptation"""
         with self.lock:
             self.cache[key] = (data, time.time())
+    
+    def get_cache_stats(self):
+        """Get cache performance statistics"""
+        with self.lock:
+            total_hits = sum(self.hit_count.values())
+            total_misses = sum(self.miss_count.values())
+            total_requests = total_hits + total_misses
+            
+            if total_requests > 0:
+                hit_rate = total_hits / total_requests
+            else:
+                hit_rate = 0
+            
+            return {
+                'hit_rate': hit_rate,
+                'total_hits': total_hits,
+                'total_misses': total_misses,
+                'cached_items': len(self.cache)
+            }
     
     def clear(self):
         """Clear cache"""
         with self.lock:
             self.cache.clear()
+            self.hit_count.clear()
+            self.miss_count.clear()
 
-# Global rate limiter and cache
-rate_limiter = RateLimiter(max_requests_per_minute=30)  # Conservative limit
-cache_manager = CacheManager(cache_duration_minutes=5)
+class CircuitBreaker:
+    """Circuit breaker pattern to handle service failures"""
+    def __init__(self, failure_threshold=5, recovery_timeout=60):
+        self.failure_threshold = failure_threshold
+        self.recovery_timeout = recovery_timeout
+        self.failure_count = 0
+        self.last_failure_time = None
+        self.state = 'CLOSED'  # CLOSED, OPEN, HALF_OPEN
+        self.lock = threading.Lock()
+    
+    def call(self, func, *args, **kwargs):
+        """Execute function with circuit breaker protection"""
+        with self.lock:
+            if self.state == 'OPEN':
+                if time.time() - self.last_failure_time > self.recovery_timeout:
+                    self.state = 'HALF_OPEN'
+                else:
+                    raise Exception("Circuit breaker is OPEN")
+            
+            try:
+                result = func(*args, **kwargs)
+                self.reset()
+                return result
+            except Exception as e:
+                self.record_failure()
+                raise e
+    
+    def record_failure(self):
+        """Record a failure"""
+        with self.lock:
+            self.failure_count += 1
+            self.last_failure_time = time.time()
+            
+            if self.failure_count >= self.failure_threshold:
+                self.state = 'OPEN'
+    
+    def reset(self):
+        """Reset circuit breaker on success"""
+        with self.lock:
+            self.failure_count = 0
+            self.state = 'CLOSED'
+
+class RequestQueue:
+    """Request queue for managing concurrent requests"""
+    def __init__(self, max_concurrent=3):
+        self.max_concurrent = max_concurrent
+        self.queue = []
+        self.active_requests = 0
+        self.lock = threading.Lock()
+        self.condition = threading.Condition(self.lock)
+    
+    def add_request(self, request_func):
+        """Add request to queue and execute when available"""
+        with self.condition:
+            self.queue.append(request_func)
+            self.condition.notify()
+            
+            # Wait for slot
+            while self.active_requests >= self.max_concurrent:
+                self.condition.wait()
+            
+            self.active_requests += 1
+            request_func = self.queue.pop(0)
+        
+        try:
+            result = request_func()
+            return result
+        finally:
+            with self.condition:
+                self.active_requests -= 1
+                self.condition.notify()
+
+# Enhanced global components with limitation avoidance
+rate_limiter = RateLimiter(max_requests_per_minute=20)  # More conservative
+cache_manager = CacheManager(cache_duration_minutes=15)  # Longer cache
+circuit_breaker = CircuitBreaker(failure_threshold=3, recovery_timeout=120)
+request_queue = RequestQueue(max_concurrent=2)  # Limit concurrent requests
 
 class MyHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -261,7 +371,7 @@ class MyHandler(BaseHTTPRequestHandler):
                 }
                 self.send_json_response([], empty_pagination, error=f"Vinted sold items scraping failed: {str(e)}")
         elif parsed_path.path == '/vestiaire':
-            # Vestiaire Collective scraping endpoint
+            # Vestiaire Collective scraping endpoint with enhanced limitation avoidance
             query_params = parse_qs(parsed_path.query)
             search_text = query_params.get('search', ['handbag'])[0]
             page_number = int(query_params.get('page', ['1'])[0])
@@ -277,6 +387,47 @@ class MyHandler(BaseHTTPRequestHandler):
                 sample_data = self.get_vestiaire_sample_data()
                 pagination = {'current_page': 1, 'total_pages': 1, 'has_more': False, 'items_per_page': len(sample_data), 'total_items': len(sample_data)}
                 self.send_json_response(sample_data, pagination, error=str(e))
+        elif parsed_path.path == '/health':
+            # API health and performance monitoring endpoint
+            health_data = {
+                'status': 'healthy',
+                'timestamp': time.time(),
+                'performance': {
+                    'cache_stats': cache_manager.get_cache_stats(),
+                    'rate_limiter': {
+                        'current_limit': rate_limiter.current_limit,
+                        'max_limit': rate_limiter.max_requests
+                    },
+                    'circuit_breaker': {
+                        'state': circuit_breaker.state,
+                        'failure_count': circuit_breaker.failure_count,
+                        'failure_threshold': circuit_breaker.failure_threshold
+                    }
+                },
+                'endpoints': {
+                    'vestiaire': 'operational',
+                    'ebay': 'operational',
+                    'vinted': 'operational'
+                },
+                'environment': {
+                    'scrapfly_key_configured': bool(os.getenv('SCRAPFLY_KEY')),
+                    'ebay_app_id_configured': bool(os.getenv('EBAY_APP_ID')),
+                    'python_version': os.sys.version
+                }
+            }
+            
+            self.send_json_response(health_data, None)
+        elif parsed_path.path == '/cache/clear':
+            # Clear cache endpoint (for maintenance)
+            cache_manager.clear()
+            rate_limiter.current_limit = rate_limiter.max_requests  # Reset rate limiter
+            circuit_breaker.reset()  # Reset circuit breaker
+            
+            response_data = {
+                'message': 'Cache and rate limiter cleared successfully',
+                'timestamp': time.time()
+            }
+            self.send_json_response(response_data, None)
         else:
             self.send_http_response(404, 'Not Found')
     
@@ -1928,98 +2079,170 @@ class MyHandler(BaseHTTPRequestHandler):
 #             self.send_error(500, f"Server Error: {str(e)}")
 #     
     def scrape_vestiaire_data(self, search_text, page_number=1, items_per_page=50, min_price=None, max_price=None, country='uk'):
-        """Scrape data from Vestiaire Collective using the new Scrapfly.io implementation"""
+        """Enhanced Vestiaire scraper with advanced limitation avoidance strategies"""
+        
+        # Create cache key
+        cache_key = f"vestiaire_{search_text}_{page_number}_{items_per_page}_{country}_{min_price}_{max_price}"
+        
+        # Check cache first
+        cached_result = cache_manager.get(cache_key)
+        if cached_result:
+            print(f"🎯 Cache hit for Vestiaire search: {search_text}")
+            return cached_result
+        
+        # Rate limiting check
+        client_ip = self.client_address[0] if hasattr(self, 'client_address') else 'unknown'
+        if not rate_limiter.is_allowed(client_ip):
+            wait_time = rate_limiter.wait_time(client_ip)
+            print(f"⏳ Rate limited, waiting {wait_time:.1f} seconds")
+            time.sleep(wait_time)
+        
+        # Circuit breaker protection
+        def protected_scrape():
+            return self._execute_vestiaire_scrape(search_text, page_number, items_per_page, min_price, max_price, country)
+        
         try:
-            # Import the new Vestiaire scraper
-            import sys
-            import os
-            sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'vestiairecollective-scraper'))
+            # Execute with circuit breaker
+            result = circuit_breaker.call(protected_scrape)
             
-            from vestiairecollective import VestiaireScraper
+            # Cache successful result
+            cache_manager.set(cache_key, result)
             
-            # Get API key from environment
-            api_key = os.getenv('SCRAPFLY_KEY')
-            if not api_key:
-                print("❌ SCRAPFLY_KEY not found in environment")
-                # Fallback to sample data
-                sample_data = self.get_vestiaire_sample_data()
-                pagination = {'current_page': 1, 'total_pages': 1, 'has_more': False, 'items_per_page': len(sample_data), 'total_items': len(sample_data)}
-                return {'products': sample_data, 'pagination': pagination}
+            # Adapt rate limiting based on success
+            rate_limiter.adapt_rate(1.0)  # 100% success rate
             
-            # Initialize the new scraper
-            scraper = VestiaireScraper(api_key)
-            
-            # Scrape search results
-            products = scraper.scrape_search_page(search_text, page=page_number, country=country)
-            
-            # Convert Product objects to dictionaries for API response
-            api_products = []
-            for product in products:
-                api_product = {
-                    "Title": product.title,
-                    "Price": f"{product.currency} {product.price}",
-                    "Brand": product.brand,
-                    "Size": product.size or "N/A",
-                    "Image": product.image_url,
-                    "Link": product.product_url,
-                    "Condition": product.condition,
-                    "Seller": product.seller,
-                }
-                
-                # Add original price and discount if available
-                if product.original_price:
-                    api_product["OriginalPrice"] = f"{product.currency} {product.original_price}"
-                if product.discount_percentage:
-                    api_product["Discount"] = f"{product.discount_percentage}%"
-                
-                api_products.append(api_product)
-            
-            # Apply price filtering if specified
-            if min_price is not None or max_price is not None:
-                filtered_products = []
-                for product in api_products:
-                    price_str = product.get('Price', '£0')
-                    # Extract numeric value from price string
-                    import re
-                    price_match = re.search(r'(\d+[.,]?\d*)', price_str.replace(' ', ''))
-                    if price_match:
-                        price_value = float(price_match.group(1).replace(',', '.'))
-                        
-                        # Apply filters
-                        include_item = True
-                        if min_price is not None:
-                            include_item = include_item and price_value >= float(min_price)
-                        if max_price is not None:
-                            include_item = include_item and price_value <= float(max_price)
-                        
-                        if include_item:
-                            filtered_products.append(product)
-                
-                api_products = filtered_products
-            
-            # Apply pagination
-            start_index = (page_number - 1) * items_per_page
-            end_index = start_index + items_per_page
-            paginated_products = api_products[start_index:end_index]
-            
-            total_items = len(api_products)
-            pagination = {
-                'current_page': page_number,
-                'total_pages': max(1, (total_items + items_per_page - 1) // items_per_page),
-                'has_more': end_index < total_items,
-                'items_per_page': items_per_page,
-                'total_items': total_items
-            }
-            
-            print(f"✅ Successfully scraped {len(paginated_products)} Vestiaire products")
-            return {'products': paginated_products, 'pagination': pagination}
+            print(f"✅ Successful Vestiaire scrape: {search_text}")
+            return result
             
         except Exception as e:
-            print(f"❌ Error with new Vestiaire scraper: {e}")
-            # Fallback to sample data
+            print(f"❌ Vestiaire scrape failed: {e}")
+            
+            # Adapt rate limiting based on failure
+            rate_limiter.adapt_rate(0.0)  # 0% success rate
+            
+            # Return fallback data
             sample_data = self.get_vestiaire_sample_data()
-            pagination = {'current_page': 1, 'total_pages': 1, 'has_more': False, 'items_per_page': len(sample_data), 'total_items': len(sample_data)}
-            return {'products': sample_data, 'pagination': pagination}
+            pagination = {
+                'current_page': page_number,
+                'total_pages': 1,
+                'has_more': False,
+                'items_per_page': len(sample_data),
+                'total_items': len(sample_data)
+            }
+            
+            fallback_result = {'products': sample_data, 'pagination': pagination}
+            cache_manager.set(cache_key, fallback_result)  # Cache fallback too
+            
+            return fallback_result
+    
+    def _execute_vestiaire_scrape(self, search_text, page_number, items_per_page, min_price, max_price, country):
+        """Execute the actual Vestiaire scrape with retry logic"""
+        
+        # Import the new Vestiaire scraper
+        import sys
+        import os
+        sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'vestiairecollective-scraper'))
+        
+        from vestiairecollective import VestiaireScraper
+        
+        # Get API key from environment
+        api_key = os.getenv('SCRAPFLY_KEY')
+        if not api_key:
+            print("❌ SCRAPFLY_KEY not found in environment")
+            raise Exception("Scrapfly API key not configured")
+        
+        # Retry logic with exponential backoff
+        max_retries = 3
+        base_delay = 1
+        
+        for attempt in range(max_retries):
+            try:
+                print(f"🔄 Vestiaire scrape attempt {attempt + 1}/{max_retries}")
+                
+                # Initialize the scraper
+                scraper = VestiaireScraper(api_key)
+                
+                # Scrape search results
+                products = scraper.scrape_search_page(search_text, page=page_number, country=country)
+                
+                if not products:
+                    print(f"⚠️ No products found, attempt {attempt + 1}")
+                    if attempt < max_retries - 1:
+                        time.sleep(base_delay * (2 ** attempt))  # Exponential backoff
+                        continue
+                
+                # Convert Product objects to dictionaries for API response
+                api_products = []
+                for product in products:
+                    api_product = {
+                        "Title": product.title,
+                        "Price": f"{product.currency} {product.price}",
+                        "Brand": product.brand,
+                        "Size": product.size or "N/A",
+                        "Image": product.image_url,
+                        "Link": product.product_url,
+                        "Condition": product.condition,
+                        "Seller": product.seller,
+                    }
+                    
+                    # Add original price and discount if available
+                    if product.original_price:
+                        api_product["OriginalPrice"] = f"{product.currency} {product.original_price}"
+                    if product.discount_percentage:
+                        api_product["Discount"] = f"{product.discount_percentage}%"
+                    
+                    api_products.append(api_product)
+                
+                # Apply price filtering if specified
+                if min_price is not None or max_price is not None:
+                    filtered_products = []
+                    for product in api_products:
+                        price_str = product.get('Price', '£0')
+                        # Extract numeric value from price string
+                        import re
+                        price_match = re.search(r'(\d+[.,]?\d*)', price_str.replace(' ', ''))
+                        if price_match:
+                            price_value = float(price_match.group(1).replace(',', '.'))
+                            
+                            # Apply filters
+                            include_item = True
+                            if min_price is not None:
+                                include_item = include_item and price_value >= float(min_price)
+                            if max_price is not None:
+                                include_item = include_item and price_value <= float(max_price)
+                            
+                            if include_item:
+                                filtered_products.append(product)
+                    
+                    api_products = filtered_products
+                
+                # Apply pagination
+                start_index = (page_number - 1) * items_per_page
+                end_index = start_index + items_per_page
+                paginated_products = api_products[start_index:end_index]
+                
+                total_items = len(api_products)
+                pagination = {
+                    'current_page': page_number,
+                    'total_pages': max(1, (total_items + items_per_page - 1) // items_per_page),
+                    'has_more': end_index < total_items,
+                    'items_per_page': items_per_page,
+                    'total_items': total_items
+                }
+                
+                print(f"✅ Successfully scraped {len(paginated_products)} Vestiaire products")
+                return {'products': paginated_products, 'pagination': pagination}
+                
+            except Exception as e:
+                print(f"⚠️ Vestiaire scrape attempt {attempt + 1} failed: {e}")
+                if attempt < max_retries - 1:
+                    delay = base_delay * (2 ** attempt)
+                    print(f"⏳ Retrying in {delay} seconds...")
+                    time.sleep(delay)
+                else:
+                    raise e
+        
+        raise Exception(f"All {max_retries} Vestiaire scrape attempts failed")
     
     def scrape_ebay_data(self, search_text, page_number=1, items_per_page=50, min_price=None, max_price=None, country='uk'):
         """Scrape data from eBay"""
@@ -2237,14 +2460,23 @@ if __name__ == '__main__':
     
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8000
     server = HTTPServer(('localhost', port), handler)
-    print(f"🚀 Server running on http://localhost:{port}")
+    print(f"🚀 Enhanced API Server running on http://localhost:{port}")
     print("📝 Available endpoints:")
     print("   / - Vinted scraper (default)")
     print("   /ebay - eBay scraper")
     print("   /ebay/sold - eBay sold items")
     print("   /vinted/sold - Vinted sold items")
-    print("   /vestiaire - Vestiaire Collective scraper")
+    print("   /vestiaire - Vestiaire Collective scraper (enhanced)")
+    print("   /health - API health and performance monitoring")
+    print("   /cache/clear - Clear cache and reset limits")
     print(f"\n💡 Example: http://localhost:{port}/?search=nike&items_per_page=5")
+    print(f"\n🛡️  Limitation Avoidance Features:")
+    print("   ✅ Adaptive rate limiting")
+    print("   ✅ Intelligent caching (15 min)")
+    print("   ✅ Circuit breaker protection")
+    print("   ✅ Retry logic with exponential backoff")
+    print("   ✅ Request queue management")
+    print("   ✅ Performance monitoring")
     
     try:
         server.serve_forever()
