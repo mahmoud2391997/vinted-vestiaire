@@ -11,8 +11,8 @@ class eBayAPIScraper:
     
     def __init__(self):
         # Load environment variables
-        self.app_id = os.environ.get('EBAY_APP_ID', '-au-PRD-c47e7b8cc-74398d07')
-        self.cert_id = os.environ.get('EBAY_CERT_ID', 'PRD-47e7b8cc3c35-9de7-466d-b49f-c75b')
+        self.app_id = os.environ.get('EBAY_APP_ID', 'mahmoude-au-PRD-2b46c198b-23c192d0')
+        self.cert_id = os.environ.get('EBAY_CERT_ID', 'PRD-b46c198bf840-117b-463e-81d1-7cb9')
         self.base_url = "https://api.ebay.com/buy/browse/v1"
         
         # Country mappings for eBay API
