@@ -157,12 +157,47 @@ class handler(BaseHTTPRequestHandler):
             country = query_params.get('country', ['uk'])[0]
             
             try:
-                data = self.scrape_ebay_working(search_text, page_number, items_per_page, min_price, max_price, country)
-                self.send_json_response(data['products'], data['pagination'])
+                # Try eBay API first, then web scraping, no dummy data
+                try:
+                    from ebay_api_scraper import eBayAPIScraper
+                    scraper = eBayAPIScraper()
+                    data = scraper.search_items(search_text, country, items_per_page, min_price, max_price)
+                    
+                    # Check if API returned real data
+                    if data['products'] and len(data['products']) > 0:
+                        self.send_json_response(data['products'], data['pagination'])
+                    else:
+                        # API returned no results, try web scraping
+                        print("🔄 API returned no results, trying web scraping")
+                        scraped_data = self.scrape_ebay_working(search_text, page_number, items_per_page, min_price, max_price, country)
+                        if scraped_data['products'] and len(scraped_data['products']) > 0:
+                            self.send_json_response(scraped_data['products'], scraped_data['pagination'], error="API fallback to web scraping")
+                        else:
+                            # No results from either method
+                            self.send_json_response([], {'current_page': 1, 'total_pages': 1, 'has_more': False, 'items_per_page': 0, 'total_items': 0}, error="No results found")
+                            
+                except ImportError:
+                    # API module not available, use web scraping directly
+                    print("⚠️ eBay API module not found, using web scraping")
+                    data = self.scrape_ebay_working(search_text, page_number, items_per_page, min_price, max_price, country)
+                    if data['products'] and len(data['products']) > 0:
+                        self.send_json_response(data['products'], data['pagination'], error="API module not available - using web scraping")
+                    else:
+                        self.send_json_response([], {'current_page': 1, 'total_pages': 1, 'has_more': False, 'items_per_page': 0, 'total_items': 0}, error="No results found")
+                        
+                except Exception as e:
+                    # API failed, try web scraping
+                    print(f"⚠️ eBay API failed, trying web scraping: {e}")
+                    scraped_data = self.scrape_ebay_working(search_text, page_number, items_per_page, min_price, max_price, country)
+                    if scraped_data['products'] and len(scraped_data['products']) > 0:
+                        self.send_json_response(scraped_data['products'], scraped_data['pagination'], error=f"API fallback: {str(e)}")
+                    else:
+                        self.send_json_response([], {'current_page': 1, 'total_pages': 1, 'has_more': False, 'items_per_page': 0, 'total_items': 0}, error="No results found")
+                        
             except Exception as e:
-                sample_data = self.get_ebay_sample_data()
-                pagination = {'current_page': 1, 'total_pages': 1, 'has_more': False, 'items_per_page': len(sample_data), 'total_items': len(sample_data)}
-                self.send_json_response(sample_data, pagination, error=str(e))
+                # Both API and scraping failed
+                print(f"❌ All eBay methods failed: {e}")
+                self.send_json_response([], {'current_page': 1, 'total_pages': 1, 'has_more': False, 'items_per_page': 0, 'total_items': 0}, error=f"Scraping failed: {str(e)}")
         elif parsed_path.path == '/ebay/sold':
             # eBay sold items endpoint
             query_params = parse_qs(parsed_path.query)
