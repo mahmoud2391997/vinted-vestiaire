@@ -772,6 +772,27 @@ class MyHandler(BaseHTTPRequestHandler):
                 if all_data:
                     print(f"✅ Successfully extracted {len(all_data)} real eBay items")
                     
+                    # Filter out placeholder items and keep only real data
+                    real_items = []
+                    for item in all_data:
+                        # Skip obvious placeholder items
+                        if (item.get('Title', '') != 'Shop on eBay' and 
+                            item.get('Title', '') != 'N/A' and
+                            item.get('Price', '') != 'N/A' and
+                            len(item.get('Title', '')) > 10 and
+                            not item.get('Title', '').startswith('Item ') and
+                            'itm/' in item.get('Link', '')):
+                            real_items.append(item)
+                    
+                    print(f"🔍 Filtered to {len(real_items)} real items (removed {len(all_data) - len(real_items)} placeholders)")
+                    
+                    # If we have real items, use them; otherwise try pattern matching
+                    if real_items:
+                        all_data = real_items
+                    else:
+                        print("🔄 No real items found, trying pattern matching")
+                        all_data = self.extract_from_patterns(response.text, search_text, currency_symbol)
+                    
                     # Apply price filtering if specified (like Vinted)
                     if min_price is not None or max_price is not None:
                         filtered_data = []
