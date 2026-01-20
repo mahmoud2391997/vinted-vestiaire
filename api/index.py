@@ -89,7 +89,7 @@ class CacheManager:
 rate_limiter = RateLimiter(max_requests_per_minute=30)  # Conservative limit
 cache_manager = CacheManager(cache_duration_minutes=5)
 
-class handler(BaseHTTPRequestHandler):
+class MyHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         # Parse URL
         parsed_path = urlparse(self.path)
