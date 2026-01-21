@@ -11,17 +11,41 @@ import threading
 from collections import defaultdict
 from datetime import datetime, timedelta
 
-# Load environment variables from .env file
-try:
-    with open('../.env', 'r') as env_file:
-        for line in env_file:
-            if line.strip() and not line.startswith('#'):
-                key, value = line.strip().split('=', 1)
-                if key.startswith('export '):
-                    key = key[7:]  # Remove 'export ' prefix
-                os.environ[key] = value.strip('"')
-except Exception as e:
-    print(f"Could not load .env file: {e}")
+# Load environment variables from .env file and Vercel environment
+import os
+
+def load_env_vars():
+    """Load environment variables from .env file and Vercel environment"""
+    # First try to load from environment (Vercel)
+    scrapfly_key = os.getenv('SCRAPFLY_KEY')
+    ebay_app_id = os.getenv('EBAY_APP_ID')
+    ebay_cert_id = os.getenv('EBAY_CERT_ID')
+    
+    # If not found, try to load from .env file (local development)
+    if not scrapfly_key or not ebay_app_id or not ebay_cert_id:
+        try:
+            with open('../.env', 'r') as env_file:
+                for line in env_file:
+                    if line.strip() and not line.startswith('#'):
+                        key, value = line.strip().split('=', 1)
+                        if key.startswith('export '):
+                            key = key[7:]  # Remove 'export ' prefix
+                        os.environ[key] = value.strip('"')
+                        
+                        # Set the variables if they were missing
+                        if key == 'SCRAPFLY_KEY' and not scrapfly_key:
+                            scrapfly_key = value.strip('"')
+                        elif key == 'EBAY_APP_ID' and not ebay_app_id:
+                            ebay_app_id = value.strip('"')
+                        elif key == 'EBAY_CERT_ID' and not ebay_cert_id:
+                            ebay_cert_id = value.strip('"')
+        except Exception as e:
+            print(f"Could not load .env file: {e}")
+    
+    return scrapfly_key, ebay_app_id, ebay_cert_id
+
+# Load environment variables at module level
+SCRAPFLY_KEY, EBAY_APP_ID, EBAY_CERT_ID = load_env_vars()
 
 class RateLimiter:
     """Advanced rate limiter to prevent 429 errors with adaptive strategies"""
@@ -2136,20 +2160,20 @@ class MyHandler(BaseHTTPRequestHandler):
             return fallback_result
     
     def _execute_vestiaire_scrape(self, search_text, page_number, items_per_page, min_price, max_price, country):
-        """Execute the actual Vestiaire scrape with retry logic"""
+        """Execute actual Vestiaire scrape using official API with fallback"""
         
-        # Import the new Vestiaire scraper
+        # Import the new Vestiaire API scraper
         import sys
         import os
         sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'vestiairecollective-scraper'))
         
-        from vestiairecollective import VestiaireScraper
+        from vestiaire_api_scraper import VestiaireAPIScraper
         
         # Get API key from environment
         api_key = os.getenv('SCRAPFLY_KEY')
-        if not api_key:
-            print("❌ SCRAPFLY_KEY not found in environment")
-            raise Exception("Scrapfly API key not configured")
+        
+        # Initialize the new API scraper
+        scraper = VestiaireAPIScraper(scrapfly_api_key=api_key)
         
         # Retry logic with exponential backoff
         max_retries = 3
@@ -2157,18 +2181,26 @@ class MyHandler(BaseHTTPRequestHandler):
         
         for attempt in range(max_retries):
             try:
-                print(f"🔄 Vestiaire scrape attempt {attempt + 1}/{max_retries}")
+                print(f"🔄 Vestiaire API scrape attempt {attempt + 1}/{max_retries}")
                 
-                # Initialize the scraper
-                scraper = VestiaireScraper(api_key)
+                # Determine gender and category from search
+                gender = ["Women"]  # Default, could be made configurable
+                category = ["Bags"]  # Default, could be made configurable
                 
-                # Scrape search results
-                products = scraper.scrape_search_page(search_text, page=page_number, country=country)
+                # Scrape using official API
+                products = scraper.scrape_search_page(
+                    search_query=search_text,
+                    page=page_number,
+                    country=country.upper(),
+                    gender=gender,
+                    category=category,
+                    items_per_page=items_per_page
+                )
                 
                 if not products:
                     print(f"⚠️ No products found, attempt {attempt + 1}")
                     if attempt < max_retries - 1:
-                        time.sleep(base_delay * (2 ** attempt))  # Exponential backoff
+                        time.sleep(base_delay * (2 ** attempt))
                         continue
                 
                 # Convert Product objects to dictionaries for API response
@@ -2183,6 +2215,7 @@ class MyHandler(BaseHTTPRequestHandler):
                         "Link": product.product_url,
                         "Condition": product.condition,
                         "Seller": product.seller,
+                        "Country": product.country,
                     }
                     
                     # Add original price and discount if available
@@ -2197,7 +2230,7 @@ class MyHandler(BaseHTTPRequestHandler):
                 if min_price is not None or max_price is not None:
                     filtered_products = []
                     for product in api_products:
-                        price_str = product.get('Price', '£0')
+                        price_str = product.get('Price', '$0')
                         # Extract numeric value from price string
                         import re
                         price_match = re.search(r'(\d+[.,]?\d*)', price_str.replace(' ', ''))
@@ -2230,11 +2263,11 @@ class MyHandler(BaseHTTPRequestHandler):
                     'total_items': total_items
                 }
                 
-                print(f"✅ Successfully scraped {len(paginated_products)} Vestiaire products")
+                print(f"✅ Successfully scraped {len(paginated_products)} Vestiaire products via official API")
                 return {'products': paginated_products, 'pagination': pagination}
                 
             except Exception as e:
-                print(f"⚠️ Vestiaire scrape attempt {attempt + 1} failed: {e}")
+                print(f"⚠️ Vestiaire API scrape attempt {attempt + 1} failed: {e}")
                 if attempt < max_retries - 1:
                     delay = base_delay * (2 ** attempt)
                     print(f"⏳ Retrying in {delay} seconds...")
@@ -2242,7 +2275,7 @@ class MyHandler(BaseHTTPRequestHandler):
                 else:
                     raise e
         
-        raise Exception(f"All {max_retries} Vestiaire scrape attempts failed")
+        raise Exception(f"All {max_retries} Vestiaire API scrape attempts failed")
     
     def scrape_ebay_data(self, search_text, page_number=1, items_per_page=50, min_price=None, max_price=None, country='uk'):
         """Scrape data from eBay"""
